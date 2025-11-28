@@ -1,0 +1,5 @@
+{
+  "example_video": "video_keywords/example_video.json",
+  "1.mp4": "video_keywords/video_1.json",
+  "https://www.youtube.com/watch?v=B-OVm3yF0ME": "video_keywords/example_video.json"
+}

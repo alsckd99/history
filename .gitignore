@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv
+env/
+venv/
+
+# Node.js
+node_modules/
+dist/
+.npm
+
+# IDE
+.vscode/
+.idea/
+
+# Large data files
+*.csv
+*.xlsx
+*.faiss
+*.pkl
+results.json
+
+# Uploaded files
+uploaded_videos/
+
+# Temp files
+*.tmp
+*.temp
+~$*
+*.hwpx
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# PDF (optional - remove if you want to include papers)
+# paper/**/*.pdf
+graphrag_data/joseon/knowledge_graph.json
+map_module/data/oldmap_pt.dbf
+

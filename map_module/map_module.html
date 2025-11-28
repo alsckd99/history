@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="utf-8" />
+    <title>시간대별 지명 자동 시각화</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2"></script>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: 'Noto Sans KR', sans-serif;
+            overflow: hidden;
+        }
+
+        #container {
+            display: flex;
+            height: 100%;
+        }
+
+        #sidebar {
+            width: 320px;
+            background: #fff;
+            border-right: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+            z-index: 2000;
+            box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+        }
+
+        #map {
+            flex: 1;
+            height: 100%;
+        }
+
+        /* 로그 창 스타일 */
+        .log-header {
+            padding: 15px;
+            background: #343a40;
+            color: white;
+            border-bottom: 1px solid #222;
+        }
+
+        .status-bar {
+            padding: 10px;
+            background: #e9ecef;
+            font-size: 13px;
+            font-weight: bold;
+            color: #495057;
+            border-bottom: 1px solid #ddd;
+        }
+
+        #logList {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+            background: #f8f9fa;
+        }
+
+        .log-item {
+            padding: 12px 15px;
+            border-bottom: 1px solid #eee;
+            background: white;
+            font-size: 14px;
+            animation: fadeIn 0.5s ease;
+        }
+
+        .log-time {
+            font-size: 11px;
+            color: #888;
+            margin-bottom: 4px;
+        }
+
+        .log-msg {
+            margin-bottom: 4px;
+            font-weight: bold;
+        }
+
+        .log-detail {
+            font-size: 12px;
+            color: #666;
+        }
+
+        /* 뱃지 스타일 */
+        .badge {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            color: white;
+            margin-right: 5px;
+        }
+
+        .badge-old {
+            background-color: #0077ff;
+        }
+
+        .badge-new {
+            background-color: #ff4444;
+        }
+
+        .badge-info {
+            background-color: #17a2b8;
+        }
+
+        /* 현재 활성화된 로그 강조 */
+        .log-item.active {
+            border-left: 5px solid #28a745;
+            background-color: #e8f5e9;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* 팝업 스타일 (카드 형태) */
+        .custom-popup .leaflet-popup-content-wrapper {
+            border-radius: 8px;
+            overflow: hidden;
+            padding: 0;
+        }
+
+        .custom-popup .leaflet-popup-content {
+            margin: 0;
+            width: 240px !important;
+        }
+
+        .popup-header {
+            color: white;
+            padding: 12px;
+        }
+
+        .popup-header h3 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: bold;
+        }
+
+        .popup-body {
+            padding: 15px;
+            font-size: 13px;
+            line-height: 1.5;
+            color: #444;
+        }
+
+        .info-row {
+            display: flex;
+            margin-bottom: 6px;
+        }
+
+        .info-label {
+            width: 60px;
+            font-weight: bold;
+            color: #888;
+            flex-shrink: 0;
+        }
+
+        .info-val {
+            flex: 1;
+            word-break: keep-all;
+        }
+
+        .header-blue {
+            background: #0077ff;
+        }
+
+        .header-red {
+            background: #ff4444;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="container">
+        <div id="sidebar">
+            <div class="log-header">
+                <h3 style="margin:0; font-size:18px;">⏳ 시간대별 지명 이동</h3>
+                <div style="font-size:12px; opacity:0.8; margin-top:5px;">자동 시나리오 실행 중...</div>
+            </div>
+            <div id="statusMsg" class="status-bar">데이터 로딩 대기...</div>
+            <div id="logList"></div>
+        </div>
+        <div id="map"></div>
+    </div>
+
+    <script>
+        // =========================================================
+        // 1. 가짜 JSON 데이터 (시간대별 시나리오)
+        // =========================================================
+        // time: 시작 후 몇 초 뒤에 이동할지
+        // type: "old" (옛지명 DB검색) / "new" (현대 API검색)
+        // name: 검색할 키워드
+        const timelineData = [
+            { time: 2, type: "old", name: "한양" },
+            { time: 8, type: "new", name: "경복궁" },     // 현대 지도에서 경복궁 검색
+            { time: 15, type: "old", name: "개성" },
+            { time: 22, type: "new", name: "부산역" },     // 현대 지도에서 부산역 검색
+            { time: 28, type: "old", name: "동래" },
+            { time: 35, type: "new", name: "제주공항" }
+        ];
+
+        // =========================================================
+        // 2. 지도 및 데이터 초기화
+        // =========================================================
+        const map = L.map('map', { preferCanvas: true }).setView([36.5, 127.5], 7);
+        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            attribution: "© OpenStreetMap", maxZoom: 19
+        }).addTo(map);
+
+        let modernMarkerLayer = L.layerGroup().addTo(map);
+        let fuse;
+
+        // 옛 지명 데이터 로드
+        fetch("data/oldmap_places_popup.json")
+            .then(res => res.json())
+            .then(data => {
+                // 지도에 파란 점 뿌리기
+                L.geoJSON(data, {
+                    pointToLayer: (feature, latlng) => {
+                        return L.circleMarker(latlng, {
+                            radius: 4, color: "transparent", fillColor: "#0033ff", fillOpacity: 0.5
+                        });
+                    },
+                    onEachFeature: (feature, layer) => {
+                        // 클릭 시 팝업 (수동 클릭용)
+                        const p = feature.properties;
+                        bindPopup(layer, p, 'old');
+                    }
+                }).addTo(map);
+
+                // 검색 엔진 준비
+                fuse = new Fuse(data.features, {
+                    keys: ["properties.name", "properties.modern_loc"],
+                    threshold: 0.3
+                });
+
+                addLog("시스템", "데이터 로드 완료. 2초 후 시나리오 시작...");
+                document.getElementById("statusMsg").innerText = "상태: 시나리오 대기 중";
+
+                // 데이터 로드가 끝나면 시나리오 시작!
+                startScenario();
+            })
+            .catch(err => {
+                console.error(err);
+                addLog("에러", "데이터 파일 로드 실패!");
+            });
+
+
+        // =========================================================
+        // 3. 시나리오 실행 엔진
+        // =========================================================
+        function startScenario() {
+            timelineData.forEach((item, index) => {
+                setTimeout(() => {
+                    processScenarioItem(item);
+                }, item.time * 1000); // 초 단위를 밀리초로 변환
+            });
+        }
+
+        async function processScenarioItem(item) {
+            const typeLabel = item.type === 'old' ? '옛지명' : '현대지명';
+            document.getElementById("statusMsg").innerText = `상태: [${typeLabel}] '${item.name}' 검색 중...`;
+
+            // 로그에 "검색 시작" 표시
+            addLog("검색", `${item.name} 찾는 중...`, item.type);
+
+            let targetData = null;
+
+            // A. 옛 지명 검색 (Local DB)
+            if (item.type === 'old') {
+                if (!fuse) return;
+                const results = fuse.search(item.name);
+
+                if (results.length > 0) {
+                    // 가장 정확한 첫 번째 결과 선택
+                    const bestMatch = results[0].item;
+                    targetData = {
+                        lat: bestMatch.geometry.coordinates[1],
+                        lon: bestMatch.geometry.coordinates[0],
+                        name: bestMatch.properties.name,
+                        chn_name: bestMatch.properties.chn_name,
+                        modern_loc: bestMatch.properties.modern_loc,
+                        type_name: bestMatch.properties.type,
+                        source: 'old'
+                    };
+                }
+            }
+            // B. 현대 지명 검색 (Nominatim API)
+            else if (item.type === 'new') {
+                try {
+                    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(item.name)}&limit=1`);
+                    if (res.ok) {
+                        const json = await res.json();
+                        if (json.length > 0) {
+                            const bestMatch = json[0];
+                            targetData = {
+                                lat: parseFloat(bestMatch.lat),
+                                lon: parseFloat(bestMatch.lon),
+                                name: item.name, // 검색어 그대로 사용
+                                fullAddr: bestMatch.display_name,
+                                source: 'new'
+                            };
+                        }
+                    }
+                } catch (e) {
+                    console.warn("API Error", e);
+                }
+            }
+
+            // 결과 처리
+            if (targetData) {
+                addLog("이동", `'${targetData.name}' 위치로 이동합니다.`, item.type, true); // true = active 효과
+                moveAndPopup(targetData);
+            } else {
+                addLog("실패", `'${item.name}' 검색 결과가 없습니다.`, "error");
+            }
+        }
+
+        // =========================================================
+        // 4. 지도 이동 및 팝업 표시
+        // =========================================================
+        function moveAndPopup(data) {
+            // 1. 지도 이동
+            map.flyTo([data.lat, data.lon], 14, { duration: 1.5 });
+
+            // 2. 현대 지명이면 마커 새로 찍기
+            if (data.source === 'new') {
+                modernMarkerLayer.clearLayers();
+                L.marker([data.lat, data.lon]).addTo(modernMarkerLayer);
+            }
+
+            // 3. 이동 완료 타이밍에 팝업 열기
+            setTimeout(() => {
+                let popupContent = '';
+
+                if (data.source === 'old') {
+                    popupContent = `
+                <div class="popup-header header-blue">
+                    <h3>${data.name} <span style="font-size:12px; font-weight:normal; opacity:0.9;">(${data.chn_name || '-'})</span></h3>
+                </div>
+                <div class="popup-body">
+                    <div class="info-row"><span class="info-label">현재위치</span><span class="info-val">${data.modern_loc}</span></div>
+                    <div class="info-row"><span class="info-label">유형</span><span class="info-val">${data.type_name}</span></div>
+                </div>`;
+                } else {
+                    popupContent = `
+                <div class="popup-header header-red">
+                    <h3>${data.name}</h3>
+                </div>
+                <div class="popup-body">
+                    <div class="info-row"><span class="info-label">주소</span><span class="info-val">${data.fullAddr}</span></div>
+                    <div style="margin-top:8px; color:#ff4444; font-size:11px;">※ 현대 지도 검색 결과</div>
+                </div>`;
+                }
+
+                L.popup({ className: 'custom-popup' })
+                    .setLatLng([data.lat, data.lon])
+                    .setContent(popupContent)
+                    .openOn(map);
+
+            }, 1500);
+        }
+
+        // 팝업 바인딩 헬퍼 (초기 로드 시 사용)
+        function bindPopup(layer, p, type) {
+            const content = `
+        <div class="popup-header header-blue">
+            <h3>${p.name} <span style="font-size:12px;">(${p.chn_name || '-'})</span></h3>
+        </div>
+        <div class="popup-body">
+            <div>${p.modern_loc}</div>
+        </div>`;
+            layer.bindPopup(content, { className: 'custom-popup' });
+        }
+
+        // =========================================================
+        // 5. 로그 UI 유틸리티
+        // =========================================================
+        function addLog(badgeText, msg, type = 'info', isActive = false) {
+            const logList = document.getElementById("logList");
+
+            // 이전 active 제거
+            if (isActive) {
+                document.querySelectorAll(".log-item").forEach(el => el.classList.remove("active"));
+            }
+
+            const item = document.createElement("div");
+            item.className = `log-item ${isActive ? 'active' : ''}`;
+
+            let badgeClass = 'badge-info';
+            if (type === 'old') badgeClass = 'badge-old';
+            if (type === 'new') badgeClass = 'badge-new';
+            if (type === 'error') badgeClass = 'badge-secondary'; // 회색 등 처리 필요하지만 일단 기본값
+
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString();
+
+            item.innerHTML = `
+        <div class="log-time">${timeStr}</div>
+        <div class="log-msg">
+            <span class="badge ${badgeClass}">${badgeText}</span> ${msg}
+        </div>
+    `;
+
+            logList.prepend(item); // 최신 로그가 위로 오게
+        }
+
+    </script>
+</body>
+
+</html>

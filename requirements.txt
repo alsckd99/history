@@ -1,0 +1,60 @@
+# YouTube 다운로드
+yt-dlp
+
+# Whisper 음성 인식
+torch
+transformers
+accelerate
+
+# 자막 다운로드 (선택사항)
+youtube-transcript-api
+
+# OpenAI (선택사항 - OpenAI 방식 사용 시)
+openai
+
+# 기타
+
+# 웹 크롤링
+selenium
+webdriver-manager
+requests
+beautifulsoup4
+lxml
+python-multipart
+
+# RAG 시스템 (LangChain)
+langchain
+langchain-community
+langchain-core
+langchain-text-splitters
+sentence-transformers
+faiss-cpu
+numpy
+tiktoken
+
+# LLM 옵션 1: Ollama (로컬 LLM, 무료)
+ollama
+
+# LLM 옵션 2: OpenAI (클라우드 API, 유료)
+langchain-openai
+
+# PDF 처리
+pypdf
+PyPDF2
+
+# 지식 그래프 (GraphRAG)
+python-arango  # ArangoDB 클라이언트
+
+# 고급 RAG 기능
+tika  # Apache Tika (고급 문서 추출)
+# 참고: 리랭커는 sentence-transformers에 포함됨 (위에 이미 설치됨)
+
+# 지식 그래프 시각화
+pyvis  # 대화형 네트워크 시각화
+networkx  # 그래프 분석
+matplotlib  # 정적 그래프 이미지
+
+# API 서버
+fastapi
+uvicorn
+pydantic

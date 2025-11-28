@@ -1,0 +1,32 @@
+{
+    "slices": [
+      {
+        "start": 0,
+        "end": 15,
+        "keywords": [
+          {"term": "한양", "score": 0.9}
+        ]
+      },
+      {
+        "start": 15,
+          "end": 30,
+        "keywords": [
+          {"term": "이순신", "score": 0.9}
+        ]
+      },
+      {
+        "start": 30,
+        "end": 45,
+        "keywords": [
+          {"term": "선조", "score": 0.9}
+        ]
+      },
+      {
+        "start": 45,
+        "end": 60,
+        "keywords": [
+          {"term": "한산도 대첩", "score": 0.95}
+        ]
+      }
+    ]
+  }

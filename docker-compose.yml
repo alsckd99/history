@@ -1,0 +1,155 @@
+services:
+  # ArangoDB (기존) - 8529 포트 (기존 데이터 유지)
+  arangodb:
+    image: arangodb/arangodb:latest
+    container_name: history-arangodb
+    environment:
+      - ARANGO_NO_AUTH=1  # 개발용 (프로덕션에서는 비밀번호 설정)
+    ports:
+      - "8529:8529"  # Web UI & API
+    volumes:
+      - arangodb_data:/var/lib/arangodb3
+      - arangodb_apps_data:/var/lib/arangodb3-apps
+    networks:
+      - history-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/lib/arangodb3/SERVER && exit 0 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  # ArangoDB 초기화 (기존 8529)
+  arangodb-init:
+    image: arangodb/arangodb:latest
+    container_name: history-arangodb-init
+    depends_on:
+      arangodb:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - history-network
+    entrypoint: >
+      sh -c "
+        echo 'Waiting for ArangoDB to be ready...' &&
+        sleep 5 &&
+        echo 'Creating knowledge_graph database...' &&
+        arangosh --server.endpoint tcp://arangodb:8529 --server.authentication false --javascript.execute-string '
+          try { 
+            db._createDatabase(\"knowledge_graph\"); 
+            console.log(\"✓ Database knowledge_graph created successfully!\"); 
+          } catch(e) { 
+            if(e.message.includes(\"duplicate\")) { 
+              console.log(\"✓ Database knowledge_graph already exists\"); 
+            } else { 
+              throw e; 
+            } 
+          }
+        '
+      "
+
+  # ArangoDB (새로운) - 8530 포트 (새 그래프 DB)
+  arangodb-new:
+    image: arangodb/arangodb:latest
+    container_name: history-arangodb-new
+    environment:
+      - ARANGO_NO_AUTH=1
+    ports:
+      - "8530:8529"  # 호스트 8530 → 컨테이너 8529
+    volumes:
+      - arangodb_new_data:/var/lib/arangodb3
+      - arangodb_new_apps:/var/lib/arangodb3-apps
+    networks:
+      - history-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/lib/arangodb3/SERVER && exit 0 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  # ArangoDB 초기화 (새로운 8530)
+  arangodb-new-init:
+    image: arangodb/arangodb:latest
+    container_name: history-arangodb-new-init
+    depends_on:
+      arangodb-new:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - history-network
+    entrypoint: >
+      sh -c "
+        echo 'Waiting for new ArangoDB to be ready...' &&
+        sleep 5 &&
+        echo 'Creating knowledge_graph database on new instance...' &&
+        arangosh --server.endpoint tcp://arangodb-new:8529 --server.authentication false --javascript.execute-string '
+          try { 
+            db._createDatabase(\"knowledge_graph\"); 
+            console.log(\"✓ Database knowledge_graph created on new instance!\"); 
+          } catch(e) { 
+            if(e.message.includes(\"duplicate\")) { 
+              console.log(\"✓ Database already exists on new instance\"); 
+            } else { 
+              throw e; 
+            } 
+          }
+        '
+      "
+
+  # Ollama - GPU 최적화된 LLM 서버
+  ollama:
+    image: ollama/ollama:latest
+    container_name: history-ollama
+    runtime: nvidia  # nvidia 런타임 명시 (중요!)
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      # GPU 최적화 설정 (DGX Spark 스타일)
+      - OLLAMA_DEBUG=1                    # 디버그 로그 활성화
+      - OLLAMA_FLASH_ATTENTION=1          # Flash attention으로 성능 향상
+      - OLLAMA_KEEP_ALIVE=30m             # 모델을 30분간 메모리에 유지
+      - OLLAMA_CUDA=1                     # CUDA 가속 활성화
+      - OLLAMA_LLM_LIBRARY=cuda_v13       # CUDA v13 명시
+      - CUDA_FORCE_PTX_JIT=1              # PTX JIT 강제 활성화
+      - OLLAMA_NUM_PARALLEL=4             # 병렬 요청 수 (워커 수와 동일)
+      - OLLAMA_MAX_LOADED_MODELS=1        # VRAM 경합 방지
+      - OLLAMA_KV_CACHE_TYPE=q8_0         # KV 캐시 메모리 최적화
+      - OLLAMA_GPU_LAYERS=999             # 최대 GPU 레이어 사용
+      - OLLAMA_GPU_MEMORY_FRACTION=0.9    # GPU 메모리 90% 사용
+      - CUDA_VISIBLE_DEVICES=0            # GPU 0 사용 (multi-GPU는 'all')
+      - NVIDIA_VISIBLE_DEVICES=all        # NVIDIA 디바이스 노출
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility  # 드라이버 기능
+      - LD_LIBRARY_PATH=/usr/lib/ollama/cuda_v13:/usr/lib/ollama:/usr/lib/aarch64-linux-gnu:/usr/local/nvidia/lib:/usr/local/nvidia/lib64  # CUDA 경로
+    networks:
+      - history-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  arangodb_data:
+  arangodb_apps_data:
+  arangodb_new_data:      # 새 ArangoDB 데이터
+  arangodb_new_apps:      # 새 ArangoDB 앱
+  ollama_data:
+
+networks:
+  history-network:
+    driver: bridge
+
