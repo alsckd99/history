@@ -1388,7 +1388,7 @@ class ArangoGraphDB:
                         continue
                 
                 # 4. 새 엔티티 삽입
-                    collection.insert(entity)
+                collection.insert(entity)
                 inserted += 1
                 
             except Exception as e:
@@ -1397,7 +1397,7 @@ class ArangoGraphDB:
         if linked > 0:
             print(f"{inserted}개 삽입, {linked}개 기존 엔티티에 연결됨")
         else:
-        print(f"{inserted}개 엔티티 삽입 완료")
+            print(f"{inserted}개 엔티티 삽입 완료")
         return inserted + linked
     
     def _find_entity_by_name(self, collection, name: str) -> Optional[Dict]:
@@ -1618,7 +1618,7 @@ class ArangoGraphDB:
         if skipped_no_subject > 0 or skipped_no_object > 0:
             print(f"{inserted}개 관계 삽입 (건너뜀: {skipped} - subject없음:{skipped_no_subject}, object없음:{skipped_no_object})")
         else:
-        print(f"{inserted}개 관계 삽입 완료")
+            print(f"{inserted}개 관계 삽입 완료")
         return inserted
     
     def _load_entity_key_map(self) -> Dict[str, str]:
