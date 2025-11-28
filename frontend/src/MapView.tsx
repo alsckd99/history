@@ -98,7 +98,7 @@ export default function MapView({ placeNames, currentTime }: MapViewProps) {
       
       // map_module/data 폴더의 JSON 파일 로드
       // 프론트엔드에서 접근하려면 public 폴더에 복사하거나 API로 제공해야 함
-      const response = await fetch('/oldmap_places_popup.json');
+      const response = await fetch(`${import.meta.env.BASE_URL}oldmap_places_popup.json`);
       
       // Content-Type 확인 (HTML이 반환되면 파일이 없는 것)
       const contentType = response.headers.get('content-type');

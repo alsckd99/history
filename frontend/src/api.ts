@@ -1,5 +1,10 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8080";
 
+// ngrok 무료 버전 경고 페이지를 건너뛰기 위한 헤더
+const defaultHeaders: HeadersInit = {
+  "ngrok-skip-browser-warning": "true"
+};
+
 export interface RegisterPayload {
   video_id: string;
   keyword_path: string;
@@ -54,7 +59,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
 export function registerVideo(payload: RegisterPayload) {
   return fetch(`${API_BASE}/videos/register`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { ...defaultHeaders, "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   }).then(handleResponse);
 }
@@ -69,13 +74,17 @@ export function fetchKeywords(
   if (start !== undefined) params.append("start", String(start));
   if (end !== undefined) params.append("end", String(end));
   params.append("top_k", String(topK));
-  return fetch(`${API_BASE}/videos/${encodeURIComponent(videoId)}/keywords?${params.toString()}`).then(
+  return fetch(`${API_BASE}/videos/${encodeURIComponent(videoId)}/keywords?${params.toString()}`, {
+    headers: defaultHeaders
+  }).then(
     handleResponse<KeywordWindow>
   );
 }
 
 export function fetchEntity(entityName: string, depth = 1) {
-  return fetch(`${API_BASE}/entity/${encodeURIComponent(entityName)}?depth=${depth}`).then(
+  return fetch(`${API_BASE}/entity/${encodeURIComponent(entityName)}?depth=${depth}`, {
+    headers: defaultHeaders
+  }).then(
     handleResponse<EntityResponse>
   );
 }
@@ -83,7 +92,7 @@ export function fetchEntity(entityName: string, depth = 1) {
 export function runQuery(payload: QueryPayload) {
   return fetch(`${API_BASE}/query`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { ...defaultHeaders, "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   }).then(handleResponse<QueryResponse>);
 }
@@ -98,6 +107,7 @@ export async function uploadVideo(
 
   return fetch(`${API_BASE}/videos/upload`, {
     method: "POST",
+    headers: defaultHeaders,
     body: formData
   }).then(handleResponse);
 }
@@ -127,12 +137,15 @@ export interface PreloadStatus {
 
 export function preloadVideoKeywords(videoId: string, topK = 5) {
   return fetch(`${API_BASE}/videos/${encodeURIComponent(videoId)}/preload?top_k=${topK}`, {
-    method: "POST"
+    method: "POST",
+    headers: defaultHeaders
   }).then(handleResponse<PreloadStatus>);
 }
 
 export function getPreloadStatus(videoId: string) {
-  return fetch(`${API_BASE}/videos/${encodeURIComponent(videoId)}/preload-status`).then(
+  return fetch(`${API_BASE}/videos/${encodeURIComponent(videoId)}/preload-status`, {
+    headers: defaultHeaders
+  }).then(
     handleResponse<PreloadStatus>
   );
 }
