@@ -72,6 +72,7 @@ function TestApp() {
 
   const [graphEntityData, setGraphEntityData] = useState<EntityResponse | null>(null);
   const [graphEntityName, setGraphEntityName] = useState<string | null>(null);
+  const [graphDisplayName, setGraphDisplayName] = useState<string | null>(null);  // 화면 표시용 이름
 
   const [showRagPopup, setShowRagPopup] = useState(false);
   const ragContentRef = useRef<HTMLDivElement>(null);
@@ -197,6 +198,7 @@ function TestApp() {
     if (!entityName || entityName === graphEntityName) {
       setGraphEntityName(null);
       setGraphEntityData(null);
+      setGraphDisplayName(null);
       return;
     }
     
@@ -204,6 +206,8 @@ function TestApp() {
     pauseVideo();
     
     setGraphEntityName(entityName);
+    // displayName이 있으면 화면 표시용으로 사용
+    setGraphDisplayName(entityData?.displayName || entityName);
     
     try {
       const docs = await fetchEntity(entityName, 1);
@@ -279,7 +283,7 @@ function TestApp() {
           {/* 지도 섹션 (관련 사료 + 지도) */}
           <div className="map-section">
             <div className="section-header">
-              <h2>{graphEntityName ? `${graphEntityName} 관련 사료 & 지도` : '지도'}</h2>
+              <h2>{graphEntityName ? `${graphDisplayName || graphEntityName} 관련 사료 & 지도` : '지도'}</h2>
             </div>
             <div className="map-content" style={{ display: 'flex', gap: '8px' }}>
               {/* 왼쪽: 관련 사료 (노드 선택 시) */}

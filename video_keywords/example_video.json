@@ -39,7 +39,7 @@
               "displayName": "노량해협",
               "children": [
                 {"term": "관음포", "start": 55, "end": 60, "type": "지명"},
-                {"term": "순천 왜성", "start": 115, "end": 120, "type": "지명"}
+                {"term": "순천왜성", "start": 115, "end": 120, "type": "지명"}
               ]
             }
           ]

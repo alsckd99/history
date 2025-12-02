@@ -253,7 +253,9 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
     // 노드 업데이트: 선택/부모는 하이라이트, 나머지는 페이드아웃
     setNodes((nds) =>
       nds.map((node) => {
-        const isSelected = node.data.label === selectedNode;
+        // term이 있으면 term으로, 없으면 label로 비교
+        const nodeTerm = node.data.term || node.data.label;
+        const isSelected = nodeTerm === selectedNode;
         const isHighlighted = highlightedIds.has(node.id);
         const isFaded = !isHighlighted;
 
@@ -916,7 +918,7 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
     };
     
     const getHorizontalGap = (depth: number): number => {
-      return Math.max(110 - (depth - 1) * 10, 70);
+      return Math.max(100 - (depth - 1) * 10, 70);
     };
     
     // 전체 트리 구조 계산
