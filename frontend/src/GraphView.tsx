@@ -189,6 +189,14 @@ const nodeTypes = {
   circle: CircleNode,
 };
 
+// React Flow 옵션 (컴포넌트 외부에서 정의하여 경고 방지)
+const defaultEdgeOptions = {
+  type: "default",
+  style: { strokeWidth: 2, stroke: COLORS.edge },
+};
+
+const fitViewOptions = { padding: 0.5 };
+
 // 내부 그래프 컴포넌트 (useReactFlow 사용을 위해 분리)
 function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPlaceNamesExtracted }: GraphViewProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -239,10 +247,8 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       return;
     }
 
-    // 선택된 노드 찾기 (term 또는 label로 비교)
-    const selectedNodeObj = nodes.find(n => 
-      (n.data.term || n.data.label) === selectedNode || n.data.label === selectedNode
-    );
+    // 선택된 노드 찾기
+    const selectedNodeObj = nodes.find(n => n.data.label === selectedNode);
     if (!selectedNodeObj) return;
 
     // 선택된 노드의 부모 ID 찾기 (1깊이 위까지)
@@ -413,7 +419,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       addedEdgesRef.current.delete(edgeId);
     });
     
-    console.log(`[GraphView] 깊이 ${minDepth} 이상 노드 제거:`, nodesToRemove);
   }, [setNodes, setEdges]);
   
   // 특정 노드에서 파생된 자식 노드들만 제거
@@ -455,7 +460,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       addedEdgesRef.current.delete(edgeId);
     });
     
-    console.log(`[GraphView] '${parentNodeId}'의 자식 노드 제거:`, nodesToRemove);
   }, [setNodes, setEdges]);
   
   // 현재 확장된 2깊이 노드 추적
@@ -480,12 +484,10 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
     
     // 최대 깊이 제한 (3까지)
     if (newDepth > 3) {
-      console.log(`[GraphView] 최대 깊이(3) 도달, 확장 중지`);
       return;
     }
     
     try {
-      console.log(`[GraphView] '${entityName}' 확장 (깊이 ${newDepth}), 현재 시간: ${currentTimeRef.current}초`);
       
       // 1. JSON에 정의된 children 확인 (수동 노드)
       const manualChildren = childrenDataRef.current.get(entityName) || [];
@@ -502,7 +504,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
           return currentSec >= child.start && currentSec <= child.end;
         });
         
-        console.log(`[GraphView] 수동 children (시간 필터링):`, filteredChildren.map((c: any) => `${c.term}(${c.start}-${c.end})`));
         
         childEntities = filteredChildren.map((child: any) => ({
           name: child.term,
@@ -521,7 +522,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       } else {
         // 2. 수동 children이 없으면 API에서 엔티티 정보 가져오기
         const data = await fetchEntity(entityName, 1);
-        console.log(`[GraphView] API 응답:`, data);
         
         // GraphDB에 있으면 neighbors 사용
         if (data.entity) {
@@ -550,10 +550,9 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       }
       
       if (childEntities.length === 0) {
-        console.log(`[GraphView] '${entityName}'의 하위 노드 없음`);
-          return;
-        }
-
+        return;
+      }
+      
       const newNodes: Node[] = [];
       const newEdges: Edge[] = [];
       
@@ -635,7 +634,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
           const uniqueNewEdges = newEdges.filter(e => !existingIds.has(e.id));
           return [...prev, ...uniqueNewEdges];
         });
-        console.log(`[GraphView] 깊이 ${newDepth} 노드 ${newNodes.length}개 추가 (아래쪽)`);
       }
     } catch (err) {
       console.error(`[GraphView] 엔티티 확장 오류:`, err);
@@ -664,34 +662,20 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       const nodeSize = isKeyword ? 50 : 30;
       focusOnPosition(node.position.x + nodeSize, node.position.y + nodeSize);
       
-      // 세력 타입은 선택/하이라이트만 하고 관련사료/RAG 검색은 안됨
-      // (onNodeClick에 skipRag: true 전달)
-      if (nodeType === '세력') {
-        console.log(`[GraphView] '${displayName}'는 '${nodeType}' 타입이므로 관련사료/질문 생략 (선택만 함)`);
-        onNodeClick(searchName, {
-          ...node.data,
-          displayName: displayName,
-          nodeType: nodeType,
-          rootKeyword: rootKeyword,
-          skipRag: true,  // RAG 검색 스킵 플래그
-          skipSources: true,  // 관련 사료 스킵 플래그
-        });
-        return;
-      }
-      
-      // 전투지역 타입은 완전히 무시 (선택도 안됨)
-      if (nodeType === '전투지역') {
-        console.log(`[GraphView] '${displayName}'는 '${nodeType}' 타입이므로 상호작용 없음`);
-        return;
-      }
+      // 세력 타입만 관련사료/질문 안됨 (노드 선택/하이라이트는 적용)
+      const excludedTypes = ['세력'];
+      const skipRag = excludedTypes.includes(nodeType);
+
       
       // 노드 클릭 시 관련 사료 표시 (onNodeClick 콜백)
       // searchName(실제 키워드)을 전달하여 검색에 사용
+      // skipRag가 true면 RAG 검색을 스킵하지만 노드 선택/하이라이트는 적용됨
       onNodeClick(searchName, {
         ...node.data,
         displayName: displayName,  // 화면 표시용 이름도 전달
         nodeType: nodeType,
         rootKeyword: rootKeyword,
+        skipRag: skipRag,  // RAG 검색 스킵 플래그
       });
     },
     [onNodeClick, selectedNode, focusOnPosition]
@@ -705,7 +689,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
   useEffect(() => {
     if (!videoId) return;
     if (currentTime < prevTimeRef.current - 15) {
-      console.log(`[GraphView] 되감기 감지: ${prevTimeRef.current} -> ${currentTime}, 그래프 초기화`);
       setNodes([]);
       setEdges([]);
       addedKeywordsRef.current.clear();
@@ -737,20 +720,16 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
           return;
         }
 
-        console.log(`[GraphView] 슬라이스 변경: ${lastSliceIndexRef.current} -> ${sliceIndex} (currentTime: ${currentSec}초)`);
         lastSliceIndexRef.current = sliceIndex;
 
         // 현재 시간 기준으로 요청 (현재 시간 이전의 키워드만)
         const start = currentSec;
         const end = currentSec + sliceDuration;
 
-        console.log(`[GraphView] API 호출: start=${start}, end=${end}`);
         const data = await fetchKeywords(videoId, start, end);
 
-        console.log(`[GraphView] API 응답:`, data.keywords?.map((k: any) => k.term));
 
         if (!data.keywords || data.keywords.length === 0) {
-          console.log(`[GraphView] 키워드 없음, 스킵`);
           return;
         }
 
@@ -763,7 +742,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
         });
 
         if (timeFilteredKeywords.length === 0) {
-          console.log(`[GraphView] 시간 조건 미충족, 스킵 (현재: ${currentSec2}초)`);
           return;
         }
 
@@ -777,7 +755,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
           return;
         }
 
-        console.log(`[GraphView] 새 키워드 추가:`, newKeywords.map((k: any) => k.term));
 
         // relations 데이터 저장 (API 응답에 있으면 - 기존에 추가)
         if (data.relations && data.relations.length > 0) {
@@ -790,7 +767,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
           );
           if (newRelations.length > 0) {
             relationsDataRef.current = [...relationsDataRef.current, ...newRelations];
-            console.log(`[GraphView] relations 추가:`, newRelations.map((r: any) => `${r.from}->${r.to}(${r.start}초)`));
           }
         }
 
@@ -806,7 +782,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
               rootKeyword: keyword.term,
             }));
             childrenDataRef.current.set(keyword.term, childrenWithRoot);
-            console.log(`[GraphView] '${keyword.term}'의 children 저장:`, childrenWithRoot.map((c: any) => `${c.term}(${c.start}-${c.end})`));
             
             // 재귀적으로 하위 children도 저장 (rootKeyword 전파)
             const saveChildrenRecursive = (children: any[], rootKw: string) => {
@@ -856,7 +831,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
           addedKeywordsRef.current.add(keyword.term);
         });
 
-        console.log(`[GraphView] 생성된 노드:`, newNodes.length, `엣지:`, newEdges.length);
 
         // 새 노드/엣지만 추가 (기존 것 유지)
         if (newNodes.length > 0) {
@@ -876,7 +850,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
           const allPlaceNames = newKeywords.map((k: any) => k.term);
 
           if (allPlaceNames.length > 0) {
-            console.log(`[GraphView] 지명 추출:`, allPlaceNames);
             onPlaceNamesExtracted(allPlaceNames);
           }
         }
@@ -934,7 +907,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
     // 변경사항이 없으면 스킵
     if (!hasNewNodes) return;
     
-    console.log(`[GraphView] 트리 재계산 - 현재 시간: ${currentSec}초`);
     
     // 깊이별 레이아웃 상수 계산 함수 (간격 축소)
     const getVerticalGap = (depth: number): number => {
@@ -1165,7 +1137,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
           });
           addedEntitiesRef.current.add(treeNode.data.label);
           
-          console.log(`[GraphView] 노드 추가: ${treeNode.data.label} (깊이 ${treeNode.data.depth})`);
         }
       });
       
@@ -1173,7 +1144,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
     });
     
     // 엣지 업데이트
-    console.log(`[GraphView] 엣지 추가 시도: ${treeEdges.length}개`, treeEdges.map(e => `${e.source} → ${e.target}`));
     
     setEdges(prev => {
       let result = [...prev];
@@ -1190,7 +1160,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
             type: "default",
             style: { stroke: COLORS.edge, strokeWidth: 2 },
           });
-          console.log(`[GraphView] 엣지 추가: ${treeEdge.source} → ${treeEdge.target}`);
         }
       });
       
@@ -1203,7 +1172,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       // 깊이에 따른 노드 크기
       const nodeSize = getNodeSizeByDepth(lastNewNode.depth);
           setTimeout(() => {
-        console.log(`[GraphView] 화면 이동: ${lastNewNode.label} (${lastNewNode.x + nodeSize/2}, ${lastNewNode.y + nodeSize/2})`);
         focusOnPosition(lastNewNode.x + nodeSize / 2, lastNewNode.y + nodeSize / 2, 0.75);
       }, 200);
     }
@@ -1241,14 +1209,10 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
         // 디버그: 어떤 노드가 없는지 확인 (5초마다만 로그)
         if (Math.floor(currentSec) % 5 === 0) {
           const nodeTerms = nodes.map(n => n.data.term || n.data.label);
-          console.log(`[GraphView] relation 대기 (${currentSec}초): ${relation.from} -> ${relation.to}`);
-          console.log(`[GraphView] 현재 노드들:`, nodeTerms);
-          console.log(`[GraphView] fromNode(${relation.from}): ${fromNode ? '있음' : '없음'}, toNode(${relation.to}): ${toNode ? '있음' : '없음'}`);
         }
         return;
       }
       
-      console.log(`[GraphView] relation 추가: ${relation.from} -> ${relation.to} (${relation.label || '연결'})`);
       
       // relation 엣지 추가 (점선, 다른 색상으로 구분)
       const edgeId = `relation-edge-${fromNode.id}-${toNode.id}`;
@@ -1309,12 +1273,10 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
     if (!videoId || preloadStartedRef.current) return;
     
     preloadStartedRef.current = true;
-    console.log(`[GraphView] 프리로드 시작: ${videoId}`);
     
     // 프리로드 시작
     preloadVideoKeywords(videoId, 5)
       .then((status) => {
-        console.log(`[GraphView] 프리로드 상태:`, status);
         setPreloadStatus(status);
       })
       .catch((err) => {
@@ -1327,7 +1289,6 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
         .then((status) => {
           setPreloadStatus(status);
           if (status.status === "complete") {
-            console.log(`[GraphView] 프리로드 완료!`);
             clearInterval(statusInterval);
           }
         })
@@ -1476,12 +1437,9 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClickWithExpand}
         nodeTypes={nodeTypes}
-        defaultEdgeOptions={{
-          type: "default", // 베지어 곡선 (가장 부드러움)
-          style: { strokeWidth: 2, stroke: COLORS.edge },
-        }}
+        defaultEdgeOptions={defaultEdgeOptions}
         fitView={nodes.length === 0}
-        fitViewOptions={{ padding: 0.5 }}
+        fitViewOptions={fitViewOptions}
         style={{ background: "#0f172a" }}
         minZoom={0.2}
         maxZoom={2}

@@ -228,33 +228,33 @@ function TestApp() {
     
     // entityName: 검색용 이름 (term), displayName: 화면 표시용 이름
     const displayName = entityData?.displayName || entityName;
-    const skipRag = entityData?.skipRag || false;
-    const skipSources = entityData?.skipSources || false;
+    
+    // skipRag가 true면 RAG 검색과 관련 사료를 스킵 (세력, 전투지역 타입)
+    const skipRag = entityData?.skipRag === true;
     
     setGraphEntityName(entityName);
     setGraphDisplayName(displayName);
     
-    // 관련 사료 스킵이 아닌 경우에만 DB 검색
-    if (!skipSources) {
-      try {
-        // DB 검색은 entityName(실제 키워드)으로
-        const docs = await fetchEntity(entityName, 1);
-        setGraphEntityData(docs);
-      } catch (err) {
-        console.error("엔티티 조회 오류:", err);
-        setGraphEntityData(null);
-      }
-    } else {
-      // 관련 사료 스킵 시 데이터 null로 설정
+    // skipRag가 true면 엔티티 데이터와 자동 질문 스킵
+    if (skipRag) {
+      console.log(`[TestApp] '${displayName}' - RAG 검색/관련 사료 스킵`);
+      setGraphEntityData(null);  // 관련 사료 패널 숨기기
+      return;
+    }
+    
+    try {
+      // DB 검색은 entityName(실제 키워드)으로
+      const docs = await fetchEntity(entityName, 1);
+      setGraphEntityData(docs);
+    } catch (err) {
+      console.error("엔티티 조회 오류:", err);
       setGraphEntityData(null);
     }
     
-    // RAG 스킵이 아닌 경우에만 자동 질문 전송
-    if (!skipRag) {
-      const nodeType = entityData?.nodeType;
-      const rootKeyword = entityData?.rootKeyword;
-      sendAutoQuery(entityName, displayName, nodeType, rootKeyword);
-    }
+    // 자동 질문 전송 (searchName, displayName 모두 전달)
+    const nodeType = entityData?.nodeType;
+    const rootKeyword = entityData?.rootKeyword;
+    sendAutoQuery(entityName, displayName, nodeType, rootKeyword);
   };
 
   return (
@@ -318,7 +318,7 @@ function TestApp() {
           {/* 지도 섹션 (관련 사료 + 지도) */}
           <div className="map-section">
             <div className="section-header">
-              <h2>{graphEntityName ? `${graphDisplayName || graphEntityName} 관련 사료 & 지도` : '지도'}</h2>
+              <h2>{graphEntityName && graphEntityData ? `${graphDisplayName || graphEntityName} 관련 사료 & 지도` : '지도'}</h2>
             </div>
             <div className="map-content" style={{ display: 'flex', gap: '8px' }}>
               {/* 왼쪽: 관련 사료 (노드 선택 시) */}

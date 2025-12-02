@@ -1469,7 +1469,7 @@ class ArangoGraphDB:
                             continue
                 
                 # 4. 새 엔티티 삽입
-                collection.insert(entity)
+                    collection.insert(entity)
                 inserted += 1
                 if is_debug:
                     print("  [DEBUG] 새 엔티티로 삽입 완료")

@@ -136,35 +136,31 @@ export default function MapView({ currentTime, videoId }: MapViewProps) {
     }
   };
 
-  // map_keyword.json 로드
+  // map_keyword.json 로드 (로컬 파일 우선)
   const loadMapKeywordData = async () => {
     try {
-      // 먼저 로컬/정적 파일에서 로드 시도 (GitHub Pages 등 배포 환경)
+      // public 폴더에서 직접 로드 (GitHub Pages 호환)
       const localResponse = await fetch(`${import.meta.env.BASE_URL}map_keyword.json`);
       if (localResponse.ok) {
         const data = await localResponse.json();
         if (data.timelineData && Array.isArray(data.timelineData)) {
           setTimelineData(data.timelineData);
-          console.log('[MapView] 로컬 타임라인 데이터 로드:', data.timelineData.length, '개');
-          return; // 성공하면 종료
+          console.log('[MapView] 타임라인 데이터 로드:', data.timelineData.length, '개');
+          return;
         }
       }
-    } catch (err) {
-      console.log('[MapView] 로컬 파일 로드 실패, API 시도:', err);
-    }
-    
-    // 로컬 파일 실패 시 API 서버 시도 (개발 환경)
-    try {
-      const response = await fetch('http://localhost:8080/map-keywords');
-      if (response.ok) {
-        const data = await response.json();
+      
+      // 로컬 실패 시 API 서버 시도 (개발 환경용)
+      const apiResponse = await fetch('http://localhost:8080/map-keywords');
+      if (apiResponse.ok) {
+        const data = await apiResponse.json();
         if (data.timelineData && Array.isArray(data.timelineData)) {
           setTimelineData(data.timelineData);
           console.log('[MapView] API 타임라인 데이터 로드:', data.timelineData.length, '개');
         }
       }
     } catch (err) {
-      console.warn('[MapView] map_keyword.json 로드 실패 (로컬 및 API 모두):', err);
+      console.warn('[MapView] map_keyword.json 로드 실패:', err);
     }
   };
 
@@ -206,14 +202,19 @@ export default function MapView({ currentTime, videoId }: MapViewProps) {
     // new 타입만 현대 지명 검색 (Nominatim API)
     if (searchType === 'new') {
       try {
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(placeName + ' 한국')}&limit=1`
-        );
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(placeName + ' 한국')}&limit=1`;
+        console.log(`[MapView] Nominatim API 호출: ${url}`);
+        
+        const response = await fetch(url);
+        console.log(`[MapView] Nominatim 응답 상태: ${response.status}`);
+        
         if (response.ok) {
           const json = await response.json();
+          console.log(`[MapView] Nominatim 결과: ${json.length}개`, json);
+          
           if (json.length > 0) {
             const best = json[0];
-            console.log(`[MapView] 현대 지명 발견: ${placeName}`);
+            console.log(`[MapView] 현대 지명 발견: ${placeName} -> (${best.lat}, ${best.lon})`);
             return {
               name: placeName,
               displayName: displayName || placeName,  // 표시용 이름 사용
@@ -222,10 +223,14 @@ export default function MapView({ currentTime, videoId }: MapViewProps) {
               fullAddr: best.display_name,
               source: 'new',
             };
+          } else {
+            console.warn(`[MapView] Nominatim에서 '${placeName}' 결과 없음`);
           }
+        } else {
+          console.warn(`[MapView] Nominatim API 오류: ${response.status}`);
         }
       } catch (err) {
-        console.warn('현대 지명 검색 오류:', err);
+        console.error('[MapView] 현대 지명 검색 오류:', err);
       }
     }
 
