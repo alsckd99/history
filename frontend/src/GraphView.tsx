@@ -1203,20 +1203,20 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       // 시간 조건 확인
       if (relation.start !== undefined && currentSec < relation.start) return;
       
-      // 두 노드가 모두 존재하는지 확인
-      const fromNodeExists = nodes.some(n => n.data.label === relation.from);
-      const toNodeExists = nodes.some(n => n.data.label === relation.to);
+      // 두 노드가 모두 존재하는지 확인 (term 또는 label로 검색)
+      const fromNode = nodes.find(n => 
+        n.data.term === relation.from || 
+        n.data.label === relation.from
+      );
+      const toNode = nodes.find(n => 
+        n.data.term === relation.to || 
+        n.data.label === relation.to
+      );
       
-      if (!fromNodeExists || !toNodeExists) {
-        console.log(`[GraphView] relation 대기: ${relation.from} -> ${relation.to} (노드 미존재)`);
+      if (!fromNode || !toNode) {
+        // 노드가 아직 없으면 대기
         return;
       }
-      
-      // 두 노드의 ID 찾기
-      const fromNode = nodes.find(n => n.data.label === relation.from);
-      const toNode = nodes.find(n => n.data.label === relation.to);
-      
-      if (!fromNode || !toNode) return;
       
       console.log(`[GraphView] relation 추가: ${relation.from} -> ${relation.to} (${relation.label || '연결'})`);
       
