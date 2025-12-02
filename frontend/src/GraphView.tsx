@@ -247,8 +247,11 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       return;
     }
 
-    // 선택된 노드 찾기
-    const selectedNodeObj = nodes.find(n => n.data.label === selectedNode);
+    // 선택된 노드 찾기 (term 또는 label로 매칭)
+    const selectedNodeObj = nodes.find(n => {
+      const nodeTerm = n.data.term || n.data.label;
+      return nodeTerm === selectedNode || n.data.label === selectedNode;
+    });
     if (!selectedNodeObj) return;
 
     // 선택된 노드의 부모 ID 찾기 (1깊이 위까지)

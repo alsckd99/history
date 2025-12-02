@@ -916,21 +916,102 @@ button:hover:not(:disabled) {
   cursor: not-allowed;
 }
 
-/* 반응형: 작은 화면에서는 세로 배치 */
+/* 반응형: 작은 화면에서는 세로 배치 + 스크롤 */
 @media (max-width: 1024px) {
+  body {
+    overflow: auto;
+    overflow-x: hidden;
+  }
+  
   .app-layout {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
   }
   
   .video-section {
-    max-height: 50vh;
+    min-height: 300px;
+    max-height: none;
+  }
+  
+  .video-player {
+    min-height: 200px;
+    aspect-ratio: 16/9;
+  }
+  
+  .right-container {
+    grid-template-rows: 350px 350px;
+    height: auto;
+    overflow: visible;
+  }
+  
+  .graph-section,
+  .graph-section-full {
+    min-height: 350px;
+    height: auto;
+  }
+  
+  .map-section {
+    min-height: 350px;
+    height: auto;
+  }
+  
+  .map-content {
+    min-height: 280px;
   }
   
   .rag-popup {
     width: calc(100% - 40px);
     left: 20px;
     right: auto;
+    max-height: 70vh;
+  }
+}
+
+/* 더 작은 화면 (모바일) */
+@media (max-width: 640px) {
+  .app-layout {
+    padding: 0.5rem;
+    gap: 0.5rem;
+  }
+  
+  .video-section {
+    padding: 1rem;
+  }
+  
+  .right-container {
+    grid-template-rows: 300px 300px;
+    gap: 0.5rem;
+  }
+  
+  .graph-section,
+  .graph-section-full,
+  .map-section {
+    min-height: 300px;
+    padding: 0.75rem;
+  }
+  
+  .section-header h2 {
+    font-size: 0.85rem;
+  }
+  
+  .rag-popup {
+    width: calc(100% - 20px);
+    left: 10px;
+    bottom: 10px;
+    height: auto;
+    max-height: 60vh;
+  }
+  
+  .upload-button-wrapper {
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  .upload-button-wrapper .upload-button {
+    max-width: 100%;
   }
 }
 
