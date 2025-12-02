@@ -170,7 +170,8 @@ function TestApp() {
   };
 
   // 자동 질문 전송 함수 (타입과 상위 노드 정보 포함)
-  const sendAutoQuery = async (entityName: string, nodeType?: string, rootKeyword?: string) => {
+  // searchName: 실제 검색용 이름 (DB 키워드), displayName: 화면 표시용 이름
+  const sendAutoQuery = async (searchName: string, displayName: string, nodeType?: string, rootKeyword?: string) => {
     // 타입에 따른 프롬프트 생성
     let typeLabel = '';
     if (nodeType) {
@@ -182,20 +183,26 @@ function TestApp() {
     
     // 상위 노드(루트 키워드) 정보 포함
     let contextPrefix = '';
-    if (rootKeyword && rootKeyword !== entityName) {
+    if (rootKeyword && rootKeyword !== displayName) {
       contextPrefix = `${rootKeyword}에서의 `;
     }
     
-    const autoQuestion = `${contextPrefix}${entityName}${typeLabel}에 대해 알려줘`;
+    // 질문은 displayName으로 (사용자에게 보여지는 이름)
+    const autoQuestion = `${contextPrefix}${displayName}${typeLabel}에 대해 알려줘`;
     setQueryLoading(true);
     setCurrentQuestion(autoQuestion);
     setShowRagPopup(true);
     
     try {
+      // focus_keywords에는 searchName(실제 DB 키워드)과 displayName 모두 포함
+      const keywords = [searchName];
+      if (displayName !== searchName) keywords.push(displayName);
+      if (rootKeyword) keywords.push(rootKeyword);
+      
       const payload = {
         query: autoQuestion,
         video_id: videoId || undefined,
-        focus_keywords: rootKeyword ? [entityName, rootKeyword] : [entityName]
+        focus_keywords: keywords
       };
       const data = await runQuery(payload);
       setChatHistory(prev => [...prev, { question: autoQuestion, answer: data.answer }]);
@@ -219,11 +226,14 @@ function TestApp() {
     setIsPaused(true);
     pauseVideo();
     
+    // entityName: 검색용 이름 (term), displayName: 화면 표시용 이름
+    const displayName = entityData?.displayName || entityName;
+    
     setGraphEntityName(entityName);
-    // displayName이 있으면 화면 표시용으로 사용
-    setGraphDisplayName(entityData?.displayName || entityName);
+    setGraphDisplayName(displayName);
     
     try {
+      // DB 검색은 entityName(실제 키워드)으로
       const docs = await fetchEntity(entityName, 1);
       setGraphEntityData(docs);
     } catch (err) {
@@ -231,10 +241,10 @@ function TestApp() {
       setGraphEntityData(null);
     }
     
-    // 자동 질문 전송 (타입과 루트 키워드 정보 포함)
+    // 자동 질문 전송 (searchName, displayName 모두 전달)
     const nodeType = entityData?.nodeType;
     const rootKeyword = entityData?.rootKeyword;
-    sendAutoQuery(entityName, nodeType, rootKeyword);
+    sendAutoQuery(entityName, displayName, nodeType, rootKeyword);
   };
 
   return (
@@ -307,10 +317,8 @@ function TestApp() {
                     {(() => {
                       const entity = graphEntityData.entity as any;
                       const sources = entity?.sources;
-                      const documents = (graphEntityData as any).documents || [];
-                      const isFaissFallback = (graphEntityData as any).faiss_fallback;
                       
-                      // 1. GraphDB sources가 있으면 사용
+                      // GraphDB sources가 있으면 사용
                       if (sources && Array.isArray(sources) && sources.length > 0) {
                         return sources.map((source: any, idx: number) => {
                           let sourceName = source.doc || source.type || '';
@@ -343,50 +351,11 @@ function TestApp() {
                         });
                       }
                       
-                      // 2. FAISS 폴백: documents 사용
-                      if (documents && documents.length > 0) {
-                        return (
-                          <>
-                            {/* {isFaissFallback && (
-                              <div style={{ 
-                                color: '#94a3b8', 
-                                fontSize: '11px', 
-                                marginBottom: '8px',
-                                padding: '4px 8px',
-                                background: 'rgba(100, 116, 139, 0.2)',
-                                borderRadius: '4px'
-                              }}>
-                              </div>
-                            )} */}
-                            {documents.map((doc: any, idx: number) => {
-                              const content = doc.content || '';
-                              const metadata = doc.metadata || {};
-                              let sourceName = metadata.doc || metadata.source || '알 수 없음';
-                              // 파일 경로에서 파일명만 추출
-                              if (sourceName.includes('/') || sourceName.includes('\\')) {
-                                sourceName = sourceName.split('/').pop()?.split('\\').pop() || sourceName;
-                              }
-                              sourceName = sourceName.replace(/\.(json|pdf|txt)$/i, '');
-                              if (sourceName.includes('_')) {
-                                sourceName = sourceName.replace(/_/g, ' ');
-                              }
-                              
-                              return (
-                                <div key={idx} className="map-source-item">
-                                  <p>{content}</p>
-                                  <small>{sourceName}</small>
-                                </div>
-                              );
-                            })}
-                          </>
-                        );
-                      }
-                      
-                      // 3. 아무것도 없으면 메시지 표시
+                      // sources가 없으면 메시지 표시
                       return (
-                        <div style={{ color: '#6b7280', fontSize: '12px', textAlign: 'center', padding: '20px' }}>
-                          관련 사료를 찾을 수 없습니다
-                        </div>
+                        // <div style={{ color: '#6b7280', fontSize: '12px', textAlign: 'center', padding: '20px' }}>
+                        //   관련 사료를 찾을 수 없습니다
+                        // </div>
                       );
                     })()}
                   </div>
