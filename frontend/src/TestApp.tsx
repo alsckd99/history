@@ -14,8 +14,8 @@ import "./styles.css";
 // ============================================================
 const TEST_CONFIG = {
   // 로컬 영상 파일 경로 (public 폴더 기준)
-  // 예: public/test_video.mp4 → "/test_video.mp4"
-  VIDEO_PATH: "노량.mp4",
+  // GitHub Pages에서는 BASE_URL이 /history/가 됨
+  VIDEO_PATH: `${import.meta.env.BASE_URL}노량.mp4`,
   
   // 영상 ID (키워드 파일과 매칭되는 ID)
   VIDEO_ID: "example_video",
