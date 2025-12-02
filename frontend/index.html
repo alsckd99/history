@@ -2,9 +2,25 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'></text></svg>" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>GraphRAG 실시간 뷰어</title>
+    <!-- GitHub Pages SPA 라우팅 복원 -->
+    <script>
+      (function() {
+        const params = new URLSearchParams(window.location.search);
+        const path = params.get('p');
+        if (path) {
+          const query = params.get('q') || '';
+          const hash = params.get('h') || '';
+          window.history.replaceState(null, '', 
+            '/history' + decodeURIComponent(path) + 
+            (query ? decodeURIComponent(query) : '') + 
+            (hash ? decodeURIComponent(hash) : '')
+          );
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

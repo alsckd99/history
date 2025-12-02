@@ -652,8 +652,8 @@ class GraphRAGSystem:
         if skip_vector_index:
             print("\n[1/3] 벡터 인덱스 구축 건너뜀 (구조화된 데이터)")
         else:
-            print("\n[1/3] 벡터 인덱스 구축 중...")
-            self._build_vector_index(documents)
+        print("\n[1/3] 벡터 인덱스 구축 중...")
+        self._build_vector_index(documents)
         
         # 2. 지식 그래프 추출 및 저장
         if extract_graph and self.graph_db.db:
@@ -738,13 +738,13 @@ class GraphRAGSystem:
         # 3단계: 나머지 문서에서 LLM 기반 추출 (간양록, 난중일기 등 일반 사료)
         if other_docs:
             print(f"  🤖 LLM 기반 지식 추출 중 ({len(other_docs)}개 문서)...")
-            extractor = KnowledgeGraphExtractor(
-                llm_model=self.llm.model if self.llm else 'deepseek-r1:latest'
-            )
-            llm_entities, llm_relations = extractor.extract_entities_and_relations(other_docs)
-            all_entities.extend(llm_entities)
-            all_relations.extend(llm_relations)
-            print(f"    → 엔티티 {len(llm_entities)}개, 관계 {len(llm_relations)}개 추출")
+        extractor = KnowledgeGraphExtractor(
+            llm_model=self.llm.model if self.llm else 'deepseek-r1:latest'
+        )
+        llm_entities, llm_relations = extractor.extract_entities_and_relations(other_docs)
+        all_entities.extend(llm_entities)
+        all_relations.extend(llm_relations)
+        print(f"    → 엔티티 {len(llm_entities)}개, 관계 {len(llm_relations)}개 추출")
         
         # 4단계: 그래프 DB에 삽입
         self._insert_into_graphs(all_entities, all_relations)
@@ -755,8 +755,6 @@ class GraphRAGSystem:
         추출 소스:
         1. 메인 엔티티 (항목명, 정의, 시대 등)
         2. 관련항목 → 명시적 관계
-        3. 본문 내 링크 [엔티티명](ID) → 언급 관계
-        4. 본문 표 → 전투 등 구조화된 데이터 (있는 경우만)
         """
         entities = []
         relations = []
@@ -767,33 +765,57 @@ class GraphRAGSystem:
         link_pattern = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
         
         
+        # 디버깅: title 없는 문서 수 추적
+        no_title_count = 0
+        
         for doc in docs:
             metadata = doc.get('metadata', {})
             
             # 메인 엔티티 생성
             title = metadata.get('title')
-            if title and title not in seen_entities:
-                # entity_type 사용 (문서 type='json'과 구분)
-                entity_type = metadata.get('entity_type') or metadata.get('category') or '항목'
-                if '/' in str(entity_type):
-                    entity_type = entity_type.split('/')[0]
-                
-                entities.append({
-                    'name': title,
-                    'type': entity_type,
-                    'hanja': metadata.get('hanja', ''),
-                    'era': metadata.get('era', ''),
-                    'category': metadata.get('category', ''),
-                    'definition': metadata.get('definition', ''),
-                    'summary': metadata.get('summary', ''),
-                    'url': metadata.get('url', ''),
-                    'sources': [{
-                        'type': '한국민족문화대백과사전',
-                        'doc': title,
-                        'snippet': metadata.get('definition', '')[:200]
-                    }]
-                })
-                seen_entities.add(title)
+            if not title:
+                no_title_count += 1
+                if no_title_count <= 5:
+                    # 디버깅: metadata의 키 확인
+                    keys = list(metadata.keys())[:10]
+                    print(f"    [DEBUG] title 없음 - metadata keys: {keys}")
+                continue
+            
+            # entity_type 사용 (문서 type='json'과 구분)
+            entity_type = metadata.get('entity_type') or metadata.get('category') or '항목'
+            if '/' in str(entity_type):
+                entity_type = entity_type.split('/')[0]
+            
+            # category(항목 분야)는 항상 존재하므로 키 생성에 사용
+            category = metadata.get('category', '')
+            
+            # 중복 체크: name + category 조합 (동음이의어 구분)
+            entity_key = f"{title}_{category}" if category else f"{title}_{entity_type}"
+            if entity_key in seen_entities:
+                continue
+            
+            # 항목 본문 가져오기
+            content = doc.get('content', '')
+            
+            entities.append({
+                'name': title,
+                'type': entity_type,
+                'hanja': metadata.get('hanja', ''),
+                'era': metadata.get('era', ''),
+                'category': category,
+                'definition': metadata.get('definition', ''),
+                'summary': metadata.get('summary', ''),
+                'content': content,  # 항목 본문 저장
+                'url': metadata.get('url', ''),  # 대표 URL (호환성)
+                'sources': [{
+                    'type': '한국민족문화대백과사전',
+                    'doc': '한국민족문화대백과사전',  # 사료명
+                    'title': title,  # 항목명
+                    'url': metadata.get('url', ''),  # 소스별 URL
+                    'snippet': metadata.get('definition', '')[:200]
+                }]
+            })
+            seen_entities.add(entity_key)
             
             # 관련항목에서 관계만 추출 (엔티티는 메인 문서에서만 생성)
             related_articles = metadata.get('related_articles', [])
@@ -817,11 +839,18 @@ class GraphRAGSystem:
                 elif '작품' in related_type or '문학' in related_type:
                     predicate = '관련_문헌'
                 
-                # 관계만 추가 (엔티티 존재 여부는 insert_relations에서 확인)
+                # 동명이의어 매칭용 추가 정보 포함
+                # subject_field는 메인 엔티티의 category(항목 분야)
                 relations.append({
                     'subject': title,
+                    'subject_type': entity_type,
+                    'subject_hanja': metadata.get('hanja', ''),
+                    'subject_field': metadata.get('category', ''),
                     'predicate': predicate,
                     'object': related_name,
+                    'object_type': related_type.split('/')[0] if related_type else '',
+                    'object_hanja': related.get('원어', ''),
+                    'object_field': related.get('항목 분야', ''),
                     'source': '한국민족문화대백과사전'
                 })
             
@@ -829,7 +858,13 @@ class GraphRAGSystem:
             content = doc.get('content', '')
             if content and title:
                 links = link_pattern.findall(content)
+                seen_links = set()  # 동일 문서 내 중복 링크 방지
                 for display_text, link_id in links:
+                    # 동일 link_id는 한 번만 처리
+                    if link_id in seen_links:
+                        continue
+                    seen_links.add(link_id)
+                    
                     # 표시 텍스트에서 엔티티명 추출
                     entity_name = display_text.strip()
                     # 괄호 안의 한자 제거
@@ -844,76 +879,20 @@ class GraphRAGSystem:
                     if entity_name == title:  # 자기 자신 참조 제외
                         continue
                     
-                    # 관계만 추가 (엔티티 존재 여부는 insert_relations에서 확인)
+                    # 관계 추가 (link_id로 정확한 엔티티 매칭 가능)
                     relations.append({
                         'subject': title,
+                        'subject_type': entity_type,
+                        'subject_hanja': metadata.get('hanja', ''),
+                        'subject_field': category,
                         'predicate': '본문_언급',
                         'object': entity_name,
+                        'object_type': '',  # 본문 링크에는 타입 정보 없음
+                        'object_hanja': '',
+                        'object_field': '',
+                        'object_url_id': link_id,  # URL ID로 정확한 매칭 가능
                         'source': '한국민족문화대백과사전'
                     })
-            
-            # 본문 표에서 관계만 추출 (엔티티는 메인 문서에서만 생성)
-            tables = metadata.get('tables', [])
-            for table in tables:
-                if not isinstance(table, dict):
-                    continue
-                
-                table_title = table.get('title', '')
-                rows = table.get('rows', [])
-                
-                # 전투 표인 경우
-                if '전투' in table_title or '대첩' in table_title:
-                    for row in rows:
-                        if not isinstance(row, dict):
-                            continue
-                        
-                        date = row.get('col_0', '')
-                        place = row.get('col_1', '')
-                        joseon_cmd = row.get('col_2', '')
-                        japan_cmd = row.get('col_3', '')
-                        outcome = row.get('col_4', '')
-                        
-                        if not place or not joseon_cmd:
-                            continue
-                        
-                        # 전투명 생성
-                        battle_name = place
-                        if '전투' not in place and '대첩' not in place:
-                            battle_name = f"{place} 전투"
-                        
-                        # 조선 지휘관 → 전투 관계
-                        joseon_clean = joseon_cmd.replace('(', '').replace(')', '').strip()
-                        if joseon_clean and joseon_clean != '?':
-                            relations.append({
-                                'subject': joseon_clean,
-                                'predicate': '전투_지휘',
-                                'object': battle_name,
-                                'date': date,
-                                'side': '조선',
-                                'outcome': outcome,
-                                'source': title
-                            })
-                        
-                        # 일본 지휘관 → 전투 관계
-                        if japan_cmd and japan_cmd != '?':
-                            relations.append({
-                                'subject': japan_cmd,
-                                'predicate': '전투_지휘',
-                                'object': battle_name,
-                                'date': date,
-                                'side': '일본',
-                                'outcome': outcome,
-                                'source': title
-                            })
-                        
-                        # 전투 → 상위 전쟁 관계
-                        if title:
-                            relations.append({
-                                'subject': battle_name,
-                                'predicate': '소속_전쟁',
-                                'object': title,
-                                'source': '한국민족문화대백과사전'
-                            })
         
         return entities, relations
     
@@ -928,17 +907,25 @@ class GraphRAGSystem:
             return
         
         # 엔티티 이름 → 키 매핑 생성 (관계 삽입용)
+        # category(항목 분야)가 항상 있으므로 이를 키 생성에 사용
         entity_key_map = {}
         for entity in entities:
             name = entity.get('name', '')
             if name:
-                # _key가 없으면 생성
+                # _key가 없으면 생성 (category 우선, 없으면 type 사용)
+                category = entity.get('category', '')
                 entity_type = entity.get('type', '')
-                if entity_type and entity_type != '미분류':
+                if category:
+                    key = self._sanitize_key_for_entity(f"{name}_{category}")
+                elif entity_type and entity_type != '미분류':
                     key = self._sanitize_key_for_entity(f"{name}_{entity_type}")
                 else:
                     key = self._sanitize_key_for_entity(name)
-                entity_key_map[name] = key
+                if name not in entity_key_map:
+                    entity_key_map[name] = {}
+                # 매핑 키도 category 기반으로
+                map_key = category or entity_type or ''
+                entity_key_map[name][map_key] = key
         
         print(f"  → 엔티티 매핑: {len(entity_key_map)}개")
         
@@ -951,20 +938,22 @@ class GraphRAGSystem:
             print(f"  [{label}] 엔티티: {stats.get('entities_count', 0)}개, 관계: {stats.get('relations_count', 0)}개")
     
     def _sanitize_key_for_entity(self, text: str) -> str:
-        """엔티티 키 생성 (graph_db.py와 동일한 로직)"""
+        """엔티티 키 생성 (graph_db.py와 동일한 로직 - SHA256 24자)"""
         import hashlib
         import re
         if not text or not isinstance(text, str):
-            return 'unknown'
+            return 'unknown_' + hashlib.sha256(str(id(text)).encode()).hexdigest()[:8]
         normalized = text.replace(' ', '_')
         ascii_only = re.sub(r'[^a-zA-Z0-9_-]', '', normalized)
-        if ascii_only and len(ascii_only) >= 3:
+        # 실제 영숫자가 3자 이상인 경우만 ASCII 키 사용
+        alphanumeric_only = re.sub(r'[^a-zA-Z0-9]', '', ascii_only)
+        if alphanumeric_only and len(alphanumeric_only) >= 3:
             if not ascii_only[0].isalpha():
                 ascii_only = 'K_' + ascii_only
             return ascii_only[:128]
-        hash_part = hashlib.md5(text.encode('utf-8')).hexdigest()[:12]
-        prefix = ascii_only[:8] if ascii_only else 'entity'
-        return f"K_{prefix}_{hash_part}"
+        # SHA256 해시의 앞 24자 사용 (충돌 확률 극히 낮음)
+        hash_part = hashlib.sha256(text.encode('utf-8')).hexdigest()[:24]
+        return f"K_{hash_part}"
     
     def _build_entity_vector_index(self):
         """엔티티 벡터 인덱스 구축 (KNN 검색용)"""
@@ -1244,30 +1233,106 @@ class GraphRAGSystem:
         graph_context = []
         seen_entities = set()
         
-        # 1단계: FAISS 엔티티 벡터 검색으로 관련 엔티티 찾기
-        print(f"[GraphRAG] 1단계: FAISS 엔티티 검색...")
-        faiss_entities = self.search_entities_knn(query, k=k_entities)
+        # 0단계: 쿼리에서 핵심 키워드 추출
+        # "X에 대해 알려줘", "X가 뭐야", "X란?" 등에서 X 추출
+        import re
+        query_keywords = []
         
-        if faiss_entities:
-            print(f"[GraphRAG] FAISS 결과: {[e.get('name') for e in faiss_entities]}")
-            for ent in faiss_entities:
-                name = ent.get('name')
-                if name and name not in seen_entities:
-                    seen_entities.add(name)
-                    all_entities.append({
-                        'name': name,
-                        'type': ent.get('type', 'unknown'),
-                        'sources': [],
-                        'similarity': ent.get('similarity_score', 0)
-                    })
-        else:
-            print(f"[GraphRAG] FAISS 엔티티 검색 결과 없음")
+        # 패턴 매칭으로 핵심 키워드 추출
+        patterns = [
+            r'^(.+?)(?:에 대해|에 관해|에대해|에관해|가 뭐|이 뭐|란\?|이란|가 무엇|이 무엇|은 무엇|는 무엇|을 알려|를 알려|에 대한|에 관한)',
+            r'^(.+?)(?:이란|란|이라는|라는|이라고|라고).*(?:뭐|무엇|알려)',
+            r'^(.+?)(?:설명|알려줘|알려주세요|알려 줘|알려 주세요)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, query)
+            if match:
+                keyword = match.group(1).strip()
+                # 불필요한 조사 제거
+                keyword = re.sub(r'(은|는|이|가|을|를|의|와|과|에서|에게|한테|로|으로)$', '', keyword)
+                if keyword and len(keyword) >= 2:
+                    query_keywords.append(keyword)
+                    print(f"[GraphRAG] 쿼리에서 핵심 키워드 추출: '{keyword}'")
+                break
+        
+        # 키워드를 추출하지 못했을 때만 명사 분리 시도
+        if not query_keywords:
+            # 간단한 명사 추출: 조사/어미 제거 후 3글자 이상 단어만
+            words = query.replace('?', '').replace('!', '').replace('.', '').split()
+            for word in words:
+                # 조사/어미 제거
+                cleaned = re.sub(r'(은|는|이|가|을|를|의|와|과|에서|에게|한테|로|으로|에|도|만|까지|부터|라고|이라고|라는|이라는|란|이란|야|이야|요|이요|죠|지요|네|군|구나)$', '', word)
+                # 3글자 이상만 (너무 짧은 단어 제외)
+                if cleaned and len(cleaned) >= 3 and cleaned not in query_keywords:
+                    query_keywords.append(cleaned)
+            if query_keywords:
+                print(f"[GraphRAG] 명사 추출 결과: {query_keywords}")
+        
+        # 1단계: 질문에서 추출한 키워드로 GraphDB 직접 검색
+        print(f"[GraphRAG] 1단계: 질문 키워드로 GraphDB 직접 검색...")
+        
+        # 메인 키워드
+        main_keyword = None
+        main_keyword_url = ''
+        
+        # GraphDB에서 키워드와 정확히 일치하는 엔티티만 검색
+        if self.graph_db and self.graph_db.db:
+            for kw in query_keywords:
+                print(f"[GraphRAG] GraphDB에서 '{kw}' 검색 중...")
+                
+                # 정확히 일치하는 엔티티만 검색 (부분 매칭 제외)
+                try:
+                    find_query = """
+                    FOR e IN entities
+                        FILTER e.name == @name
+                        LIMIT 5
+                        RETURN e
+                    """
+                    cursor = self.graph_db.db.aql.execute(find_query, bind_vars={'name': kw})
+                    found_entities = list(cursor)
+                    
+                    # 정확히 일치하는 것이 없으면 키워드를 포함하는 엔티티 검색
+                    # (단, 키워드 길이가 3자 이상일 때만)
+                    if not found_entities and len(kw) >= 3:
+                        find_query2 = """
+                        FOR e IN entities
+                            FILTER CONTAINS(e.name, @name)
+                            SORT LENGTH(e.name) ASC
+                            LIMIT 3
+                            RETURN e
+                        """
+                        cursor = self.graph_db.db.aql.execute(find_query2, bind_vars={'name': kw})
+                        found_entities = list(cursor)
+                    
+                    for ent in found_entities:
+                        name = ent.get('name')
+                        if name and name not in seen_entities:
+                            seen_entities.add(name)
+                            entity_data = {
+                                'name': name,
+                                'type': ent.get('type', 'unknown'),
+                                'sources': ent.get('sources', []),
+                                'definition': ent.get('definition', ''),
+                                'summary': ent.get('summary', ''),
+                                'url': ent.get('url', ''),
+                                'category': ent.get('category', '')
+                            }
+                            all_entities.append(entity_data)
+                            print(f"[GraphRAG] GraphDB에서 발견: '{name}' (type: {ent.get('type', 'unknown')})")
+                except Exception as e:
+                    print(f"[GraphRAG] GraphDB 검색 오류: {e}")
+        
+        if not all_entities:
+            print(f"[GraphRAG] GraphDB에서 일치하는 엔티티 없음")
         
         # 2단계: 그래프 DB에서 관계 확장
         if not self.graph_db or not self.graph_db.db:
             print("[GraphRAG] 경고: 그래프 DB가 연결되지 않음!")
             return {
                 'query': query,
+                'main_keyword': None,
+                'main_keyword_url': '',
                 'entities': all_entities,
                 'relations': [],
                 'graph_context': [],
@@ -1276,14 +1341,30 @@ class GraphRAGSystem:
         
         print(f"[GraphRAG] 2단계: 그래프 DB 관계 확장...")
         
-        # FAISS에서 찾은 엔티티들의 그래프 관계 조회
-        for entity in all_entities[:3]:  # 상위 3개 엔티티만
+        # 1단계에서 찾은 엔티티들의 그래프 관계 조회
+        # 첫 번째 엔티티를 메인 키워드로 설정
+        for entity in all_entities[:5]:  # 상위 5개 엔티티
             name = entity['name']
             print(f"[GraphRAG] '{name}' 관계 조회 중...")
+            
+            # 메인 키워드 설정 (첫 번째 엔티티)
+            if main_keyword is None:
+                main_keyword = name
+                # URL은 이미 1단계에서 가져온 경우
+                main_keyword_url = entity.get('url', '')
+                if not main_keyword_url:
+                    # sources에서 백과사전 URL 찾기
+                    for src in entity.get('sources', []):
+                        if isinstance(src, dict):
+                            if src.get('doc') == '한국민족문화대백과사전' and src.get('url'):
+                                main_keyword_url = src.get('url')
+                                break
+                print(f"[GraphRAG] 메인 키워드 설정: '{main_keyword}' (URL: {main_keyword_url[:50] if main_keyword_url else 'None'}...)")
             
             neighbors = self.graph_db.query_neighbors(name, depth=graph_depth)
             
             if neighbors.get('entities') or neighbors.get('relations'):
+                
                 graph_context.append({
                     'center_entity': name,
                     'neighbors': neighbors
@@ -1319,6 +1400,7 @@ class GraphRAGSystem:
         
         # 검색 결과 요약
         print(f"\n[GraphRAG] 검색 완료:")
+        print(f"  - 메인 키워드: {main_keyword}")
         print(f"  - 엔티티: {len(all_entities)}개")
         print(f"  - 관계: {len(all_relations)}개")
         print(f"  - 출처: {len(all_sources)}개")
@@ -1329,12 +1411,14 @@ class GraphRAGSystem:
         
         return {
             'query': query,
+            'main_keyword': main_keyword,  # 메인 키워드 (FAISS 결과 중 GraphDB에 존재하는 첫 번째)
+            'main_keyword_url': main_keyword_url,  # 한국민족문화대백과사전 URL
             'entities': all_entities[:k_entities],
             'relations': all_relations[:10],
             'graph_context': graph_context,
             'sources': list(all_sources)
         }
-
+    
     def hybrid_search(
         self,
         query: str,
@@ -1382,7 +1466,7 @@ class GraphRAGSystem:
         query: str,
         use_graph: bool = True
     ) -> str:
-        """질문에 대한 답변 생성 (그래프 DB 기반)
+        """질문에 대한 답변 생성 (한국민족문화대백과사전 우선)
         
         Args:
             query: 질문
@@ -1390,82 +1474,136 @@ class GraphRAGSystem:
             
         Returns:
             답변 텍스트
+            
+        우선순위:
+            1. 한국민족문화대백과사전 정보 (definition, summary)
+            2. 관련 사료 정보 (선조실록, 난중일기 등)
+            3. 정보 부족 시 FAISS 벡터 검색 보완
         """
         if not self.llm:
             return "LLM이 초기화되지 않았습니다."
         
-        # 그래프 DB 기반 검색 (FAISS 미사용)
-        results = self.graph_only_search(query, k_entities=5, graph_depth=1)
+        # 그래프 DB 기반 검색
+        results = self.graph_only_search(query, k_entities=10, graph_depth=1)
         
-        # 컨텍스트 구성
+        # 컨텍스트 구성 (우선순위별로 분리)
+        encyclopedia_parts = []  # 한국민족문화대백과사전
+        historical_parts = []    # 역사 사료 (선조실록, 난중일기 등)
+        relation_parts = []      # 지식 그래프 관계
+        
+        # 1순위: 한국민족문화대백과사전 정보 추출
+        for entity in results.get('entities', []):
+            entity_name = entity.get('name', '')
+            entity_type = entity.get('type', '')
+            definition = entity.get('definition', '')
+            summary = entity.get('summary', '')
+            sources = entity.get('sources', [])
+            
+            # 백과사전 정보 확인
+            has_encyclopedia = False
+            encyclopedia_snippet = ''
+            historical_snippets = []
+            
+            for src in sources if isinstance(sources, list) else []:
+                if not isinstance(src, dict):
+                    continue
+                src_type = src.get('type', '')
+                src_doc = src.get('doc', '')
+                snippet = src.get('snippet', '')
+                
+                if '한국민족문화대백과사전' in src_type:
+                    has_encyclopedia = True
+                    encyclopedia_snippet = snippet or definition or summary
+                else:
+                    # 일반 사료
+                    if snippet:
+                        # 출처명 정리
+                        doc_name = src_doc
+                        for ext in ['.pdf', '.json', '.txt']:
+                            doc_name = doc_name.replace(ext, '')
+                        if '_' in doc_name:
+                            doc_name = doc_name.replace('_', ' ')
+                        historical_snippets.append((doc_name, snippet))
+            
+            # 백과사전 정보 추가 (1순위)
+            if has_encyclopedia and encyclopedia_snippet:
+                info = f"### {entity_name} ({entity_type})\n"
+                info += f"{encyclopedia_snippet[:500]}"
+                if definition and definition not in encyclopedia_snippet:
+                    info += f"\n정의: {definition[:300]}"
+                encyclopedia_parts.append(info)
+        
+            # 사료 정보 추가 (2순위)
+            for doc_name, snippet in historical_snippets[:3]:
+                info = f"- [{doc_name}] {entity_name}: {snippet[:200]}"
+                historical_parts.append(info)
+        
+        # 지식 그래프 관계 (3순위)
+        for rel in results.get('relations', [])[:10]:
+            subject = rel.get('subject', '')
+            predicate = rel.get('predicate', '')
+            obj = rel.get('object', '')
+            if subject and predicate and obj:
+                relation_parts.append(f"- {subject} --[{predicate}]--> {obj}")
+        
+        # 컨텍스트 조합
         context_parts = []
         
-        # 관련 엔티티
-        if results['entities']:
-            context_parts.append("## 관련 엔티티:")
-            for entity in results['entities'][:5]:
-                entity_info = f"- {entity['name']} ({entity['type']})"
-                # 엔티티 출처에서 스니펫 추가
-                sources = entity.get('sources', [])
-                if sources and isinstance(sources[0], dict):
-                    snippet = sources[0].get('snippet', '')
-                    if snippet:
-                        entity_info += f"\n  설명: {snippet[:200]}"
-                context_parts.append(entity_info)
+        if encyclopedia_parts:
+            context_parts.append("## 한국민족문화대백과사전 정보 (신뢰도 높음):")
+            context_parts.extend(encyclopedia_parts[:5])
         
-        # 지식 그래프 관계 (트리플)
-        if results['relations']:
+        if historical_parts:
+            context_parts.append("\n\n## 관련 역사 사료:")
+            context_parts.extend(historical_parts[:10])
+        
+        if relation_parts:
             context_parts.append("\n\n## 지식 그래프 관계:")
-            for rel in results['relations'][:10]:
-                subject = rel.get('subject', '')
-                predicate = rel.get('predicate', '')
-                obj = rel.get('object', '')
-                source = rel.get('source', '')
-                if subject and predicate and obj:
-                    # 출처 정리
-                    if source:
-                        source_name = source.split('/')[-1].split('\\')[-1]
-                        for ext in ['.pdf', '.json', '.txt', '.md', '.docx']:
-                            source_name = source_name.replace(ext, '')
-                        if '_' in source_name:
-                            source_name = source_name.split('_')[0]
-                        context_parts.append(f"- {subject} --[{predicate}]--> {obj} (출처: {source_name})")
-                    else:
-                        context_parts.append(f"- {subject} --[{predicate}]--> {obj}")
+            context_parts.extend(relation_parts[:10])
         
-        # 그래프 컨텍스트 (이웃 관계)
-        if results['graph_context']:
-            context_parts.append("\n\n## 확장 관계:")
-            for graph in results['graph_context'][:3]:
-                center = graph['center_entity']
-                neighbors = graph.get('neighbors', {})
-                relations = neighbors.get('relations', [])[:5]
-                
-                if relations:
-                    context_parts.append(f"\n[{center} 관련]")
-                    for rel in relations:
-                        triple = rel.get('triple', {})
-                        if triple:
-                            context_parts.append(
-                                f"  - {triple.get('subject', '')} --[{triple.get('predicate', '')}]--> {triple.get('object', '')}"
-                            )
+        # 정보가 부족하면 FAISS 벡터 검색으로 보완
+        faiss_sources = []  # FAISS에서 찾은 출처 저장
+        if len(encyclopedia_parts) < 2 and len(historical_parts) < 3:
+            if self.vectorstore:
+                print("[답변 생성] 정보 부족 - FAISS 벡터 검색으로 보완")
+                try:
+                    faiss_docs = self.vectorstore.similarity_search(query, k=3)
+                    if faiss_docs:
+                        context_parts.append("\n\n## 추가 참고 문서 (벡터 검색):")
+                        for doc in faiss_docs:
+                            content = doc.page_content[:300]
+                            source = doc.metadata.get('source', '')
+                            if source:
+                                source_name = source.split('/')[-1].split('\\')[-1]
+                                for ext in ['.pdf', '.json', '.txt']:
+                                    source_name = source_name.replace(ext, '')
+                                context_parts.append(f"- [{source_name}] {content}")
+                                # FAISS 출처 저장 (나중에 참고 문서에 추가)
+                                if source_name:
+                                    faiss_sources.append(source_name)
+                            else:
+                                context_parts.append(f"- {content}")
+                except Exception as e:
+                    print(f"FAISS 검색 오류: {e}")
         
         context = "\n".join(context_parts)
         
         # 프롬프트 생성
         prompt = f"""당신은 한국 역사 전문가입니다.
-주어진 지식 그래프의 엔티티와 관계 정보를 참고하여 질문에 답변하세요.
+주어진 정보를 바탕으로 질문에 정확하게 답변하세요.
 
-참고 정보:
+**중요**: 한국민족문화대백과사전 정보를 최우선으로 참고하고, 
+역사 사료의 내용을 보충 설명에 활용하세요.
+
 {context}
 
 질문: {query}
 
 답변 작성 가이드:
-1. 지식 그래프의 엔티티와 관계 정보를 종합하여 답변
-2. 엔티티 간의 관계를 명확히 설명
+1. 한국민족문화대백과사전의 정의와 설명을 기반으로 핵심 내용 작성
+2. 역사 사료의 구체적인 기록을 인용하여 보충
 3. 역사적 사실을 정확하게 기술
-4. 3-5문장으로 핵심을 요약
+4. 5-7문장으로 상세하게 설명
 
 답변:"""
         
@@ -1474,22 +1612,88 @@ class GraphRAGSystem:
         try:
             response = self.llm.invoke(prompt)
             
-            # 답변 구성
-            answer_parts = [response.strip()]
+            # 답변에서 마크다운 헤더 제거 (## 제목 등)
+            import re
+            cleaned_response = response.strip()
+            # 첫 줄이 마크다운 헤더면 제거
+            cleaned_response = re.sub(r'^#{1,6}\s+.+?\n+', '', cleaned_response)
+            # 중간에 있는 마크다운 헤더도 제거
+            cleaned_response = re.sub(r'\n#{1,6}\s+.+?\n', '\n', cleaned_response)
             
-            # 참고 문서 추가 (그래프에서 수집된 출처)
-            doc_sources = set()
+            # 답변 구성
+            answer_parts = [cleaned_response.strip()]
+            
+            # 메인 키워드 (FAISS 검색 결과 중 GraphDB에 존재하는 첫 번째)
+            main_keyword = results.get('main_keyword', '')
+            main_keyword_url = results.get('main_keyword_url', '')
+            
+            # 관련 출처 수집 (엔티티의 sources에서)
+            doc_sources = []  # [(출처명, url), ...]
+            seen_sources = set()
+            
+            # 1. 한국민족문화대백과사전 (메인 키워드 URL로 하이퍼링크)
+            if main_keyword_url:
+                doc_sources.append(('한국민족문화대백과사전', main_keyword_url))
+                seen_sources.add('한국민족문화대백과사전')
+            
+            # 2. 다른 사료들 수집 (난중일기, 선조실록 등)
+            for entity in results.get('entities', []):
+                sources = entity.get('sources', [])
+                for src in sources if isinstance(sources, list) else []:
+                    if not isinstance(src, dict):
+                        continue
+                    
+                    src_doc = src.get('doc', '')
+                    src_type = src.get('type', '')
+                    
+                    # 한국민족문화대백과사전은 이미 추가됨
+                    if src_doc == '한국민족문화대백과사전' or '한국민족문화대백과사전' in str(src_type):
+                        continue
+                    
+                    # 출처명 정리
+                    source_name = src_doc or src_type or ''
+                    for ext in ['.pdf', '.json', '.txt', '.md', '.docx']:
+                        source_name = source_name.replace(ext, '')
+                    if '_' in source_name:
+                        source_name = source_name.replace('_', ' ')
+                    
+                    if source_name and source_name not in seen_sources:
+                        seen_sources.add(source_name)
+                        doc_sources.append((source_name, ''))  # 다른 사료는 URL 없음
+            
+            # 3. results.sources에서도 추가 (fallback)
             for source in results.get('sources', []):
                 if source:
                     source_name = source.split('/')[-1].split('\\')[-1]
                     for ext in ['.pdf', '.json', '.txt', '.md', '.docx']:
                         source_name = source_name.replace(ext, '')
                     if '_' in source_name:
-                        source_name = source_name.split('_')[0]
-                    doc_sources.add(source_name)
+                        source_name = source_name.replace('_', ' ')
+                    if source_name and source_name not in seen_sources:
+                        seen_sources.add(source_name)
+                        doc_sources.append((source_name, ''))
             
+            # 4. FAISS 검색에서 찾은 출처 추가
+            for faiss_source in faiss_sources:
+                # 출처명 정리
+                source_name = faiss_source
+                for ext in ['.pdf', '.json', '.txt', '.md', '.docx']:
+                    source_name = source_name.replace(ext, '')
+                if '_' in source_name:
+                    source_name = source_name.replace('_', ' ')  # _ → 띄어쓰기
+                if source_name and source_name not in seen_sources:
+                    seen_sources.add(source_name)
+                    doc_sources.append((source_name, ''))
+            
+            # 참고 문서 포맷팅
             if doc_sources:
-                answer_parts.append("\n\n참고 문서: " + ", ".join(sorted(doc_sources)))
+                ref_parts = []
+                for name, url in doc_sources[:10]:  # 최대 10개
+                    if url:
+                        ref_parts.append(f"[{name}]({url})")
+                    else:
+                        ref_parts.append(name)
+                answer_parts.append("\n\n참고 문서: " + ", ".join(ref_parts))
             
             return "\n".join(answer_parts)
             
@@ -1586,6 +1790,89 @@ class GraphRAGSystem:
             raise Exception("로드할 인덱스 파일이 없습니다")
 
 
+def _copy_encykorea_to_global(encykorea_db: str, global_db: str):
+    """한국민족문화대백과사전 DB를 통합 그래프 DB로 복사
+    
+    Args:
+        encykorea_db: 백과사전 DB 이름 (kg_encykorea)
+        global_db: 통합 그래프 DB 이름 (knowledge_graph)
+    """
+    from arango import ArangoClient
+    
+    client = ArangoClient(hosts='http://localhost:8530')
+    sys_db = client.db('_system', username='root', password='')
+    
+    # 백과사전 DB 존재 확인
+    if not sys_db.has_database(encykorea_db):
+        raise Exception(f"백과사전 DB '{encykorea_db}'가 존재하지 않습니다.")
+    
+    # 통합 DB 초기화 (삭제 후 재생성)
+    if sys_db.has_database(global_db):
+        sys_db.delete_database(global_db)
+        print(f"  - 기존 통합 DB '{global_db}' 삭제")
+    
+    sys_db.create_database(global_db)
+    print(f"  - 통합 DB '{global_db}' 생성")
+    
+    # 백과사전 DB 연결
+    ency_db = client.db(encykorea_db, username='root', password='')
+    global_db_conn = client.db(global_db, username='root', password='')
+    
+    # 컬렉션 복사
+    for col_name in ['entities', 'relations']:
+        if ency_db.has_collection(col_name):
+            # 통합 DB에 컬렉션 생성
+            is_edge = (col_name == 'relations')
+            if is_edge:
+                global_db_conn.create_collection(col_name, edge=True)
+            else:
+                global_db_conn.create_collection(col_name)
+            
+            # 데이터 복사
+            src_col = ency_db.collection(col_name)
+            dst_col = global_db_conn.collection(col_name)
+            
+            # 배치로 복사 (성능 최적화)
+            batch_size = 1000
+            cursor = src_col.all()
+            batch = []
+            total_copied = 0
+            
+            for doc in cursor:
+                # _id, _rev 제거 (새 DB에서 자동 생성)
+                doc_copy = {k: v for k, v in doc.items() if k not in ['_id', '_rev']}
+                batch.append(doc_copy)
+                
+                if len(batch) >= batch_size:
+                    try:
+                        dst_col.insert_many(batch)
+                        total_copied += len(batch)
+                    except Exception as e:
+                        # 개별 삽입 시도
+                        for d in batch:
+                            try:
+                                dst_col.insert(d)
+                                total_copied += 1
+                            except:
+                                pass
+                    batch = []
+            
+            # 남은 배치 처리
+            if batch:
+                try:
+                    dst_col.insert_many(batch)
+                    total_copied += len(batch)
+                except Exception as e:
+                    for d in batch:
+                        try:
+                            dst_col.insert(d)
+                            total_copied += 1
+                        except:
+                            pass
+            
+            print(f"  - {col_name}: {total_copied}개 복사")
+
+
 def main():
     """GraphRAG 시스템 실행"""
     print("GraphRAG 시스템 - 지식 그래프 + 벡터 검색")
@@ -1619,16 +1906,14 @@ def main():
         '난중일기': 'najung',
         '한국민족문화대백과사전': 'encykorea'
     }
+    # 한국민족문화대백과사전은 이미 구축됨 (kg_encykorea) - 초기화 금지
+    # 통합 그래프(knowledge_graph)는 kg_encykorea를 먼저 복사한 후 다른 소스 추가
+    ENCYKOREA_DB = 'kg_encykorea'  # 백과사전 DB (절대 초기화 안 됨)
+    
     TARGET_SOURCES = [
-        '한국민족문화대백과사전',  # 골든 데이터 (필수, 먼저 처리)
-        '간양록',          
-        '난중일기',
-        '징비록',
-        '조선왕조실록',
-        '재조번방지'
-        # '연려실기술',
-        # '기재사초',
-        # '고대일록',
+        # '한국민족문화대백과사전',  # 이미 구축됨 - 제외
+        '연려실기술',
+        '고대일록',
         # '난중잡록'
     ]
     # ============================================================
@@ -1654,6 +1939,20 @@ def main():
         global_reset_remaining = True  # 첫 실행은 항상 초기화
     else:
         global_reset_remaining = env_global_reset.lower() in ('1', 'true', 'yes')
+    
+    # 통합 그래프 초기화 시 한국민족문화대백과사전 데이터 먼저 복사
+    if global_reset_remaining:
+        print(f"\n📚 통합 그래프 초기화: {ENCYKOREA_DB} → {global_db_name}")
+        try:
+            from graph_db import ArangoGraphDB
+            # 백과사전 DB에서 통합 DB로 복사
+            _copy_encykorea_to_global(ENCYKOREA_DB, global_db_name)
+            global_reset_remaining = False  # 복사 완료 후 초기화 비활성화
+            print(f"  ✓ 백과사전 데이터 복사 완료")
+        except Exception as e:
+            print(f"  ⚠ 백과사전 데이터 복사 실패: {e}")
+            import traceback
+            traceback.print_exc()
     
     def build_source_db_name(slug: str) -> str:
         env_db = os.getenv('SOURCE_GRAPH_DB')
@@ -1714,7 +2013,10 @@ def main():
         has_entity_index = os.path.exists(entity_index_path)
         has_graph_json = os.path.exists(graph_json_path)
         
-        if has_doc_index or has_entity_index or has_graph_json:
+        # 강제 재구축 여부 (환경변수 또는 명령줄 인자로 설정 가능)
+        force_rebuild = os.getenv('FORCE_REBUILD', 'false').lower() in ('1', 'true', 'yes')
+        
+        if not force_rebuild and (has_doc_index or has_entity_index or has_graph_json):
             print(f"\n✓ 기존 인덱스 발견: {data_dir}")
             if has_doc_index:
                 print("  - 문서 인덱스: ✓")
@@ -1733,6 +2035,8 @@ def main():
                 print("새로 구축합니다...")
                 sample_docs = documents  # 전체 문서
         else:
+            if force_rebuild:
+                print(f"\n⚠ 강제 재구축 모드 (FORCE_REBUILD=true)")
             print("\n기존 인덱스가 없습니다. 새로 구축합니다.")
             sample_docs = documents  # 전체 문서
         

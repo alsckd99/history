@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Redirecting...</title>
+    <script>
+      // GitHub Pages SPA 리다이렉트 트릭
+      // 404 발생 시 쿼리 파라미터로 경로를 전달하고 index.html로 이동
+      const path = window.location.pathname;
+      const query = window.location.search;
+      const hash = window.location.hash;
+      
+      // 경로를 쿼리 파라미터로 인코딩
+      window.location.replace(
+        window.location.origin + '/history/?p=' + 
+        encodeURIComponent(path.replace('/history', '')) + 
+        (query ? '&q=' + encodeURIComponent(query) : '') +
+        (hash ? '&h=' + encodeURIComponent(hash) : '')
+      );
+    </script>
+  </head>
+  <body>
+    <p>Redirecting...</p>
+  </body>
+</html>
+

@@ -1,32 +1,58 @@
 {
-    "slices": [
-      {
-        "start": 0,
-        "end": 15,
-        "keywords": [
-          {"term": "한양", "score": 0.9}
-        ]
-      },
-      {
-        "start": 15,
-          "end": 30,
-        "keywords": [
-          {"term": "이순신", "score": 0.9}
-        ]
-      },
-      {
-        "start": 30,
-        "end": 45,
-        "keywords": [
-          {"term": "선조", "score": 0.9}
-        ]
-      },
-      {
-        "start": 45,
-        "end": 60,
-        "keywords": [
-          {"term": "한산도 대첩", "score": 0.95}
-        ]
-      }
-    ]
-  }
+  "slices": [
+    {
+      "start": 3,
+      "end": 120,
+      "keywords": [
+        {
+          "term": "노량해전",
+          "start": 3,
+          "end": 120,
+          "score": 0.9,
+          "type": "사건",
+          "children": [
+            {
+              "term": "조·명 연합 수군",
+              "start": 9,
+              "end": 30,
+              "type": "세력",
+              "children": [
+                {"term": "이순신", "start": 9, "end": 30, "type": "인물"},
+                {"term": "진린", "start": 80, "end": 85, "type": "인물"}
+              ]
+            },
+            {
+              "term": "일본군",
+              "start": 20,
+              "end": 115,
+              "type": "세력",
+              "children": [
+                {"term": "고니시 유키나가", "start": 110, "end": 115, "type": "인물"},
+                {"term": "시마즈 요시히로", "start": 194, "end": 200, "type": "인물"}
+              ]
+            },
+            {
+              "term": "노량도",
+              "start": 14,
+              "end": 60,
+              "type": "지명",
+              "displayName": "노량해협",
+              "children": [
+                {"term": "관음포", "start": 55, "end": 60, "type": "지명"},
+                {"term": "순천 왜성", "start": 115, "end": 120, "type": "지명"}
+              ]
+            }
+          ]
+        }
+      ],
+      "relations": [
+        {
+          "start": 68,
+          "from": "이순신",
+          "to": "관음포",
+          "label": "매복"
+        }
+      ]
+    }
+  ]
+}

@@ -777,23 +777,40 @@ class KnowledgeGraphExtractor:
         return normalized or entity.strip()
     
     def _classify_entity(self, entity: str) -> str:
+        """규칙 기반 엔티티 타입 분류 (한국민족문화대백과사전 타입 체계)
+        
+        LLM이 타입을 지정하지 않았을 때 사용하는 폴백 분류기
+        """
         if not entity:
-            return 'entity'
+            return '미분류'
         text = entity.strip()
-        if re.search(r'\d{2,4}\s*년', text) or any(token in text for token in ['월', '일']):
-            return 'date'
-        dynasty_keywords = ['조선', '고려', '고구려', '백제', '신라', '발해', '대한제국']
-        if any(token in text for token in dynasty_keywords):
-            return 'dynasty'
-        if any(token in text for token in ['대첩', '전투', '전쟁', '사건', '해전', '봉기']):
-            return 'event'
-        if any(token in text for token in ['성', '포', '도', '섬', '산', '강', '현', '군']) and len(text) <= 6:
-            return 'location'
-        if any(text.endswith(suffix) for suffix in ['장군', '공', '대감', '장관', '후', '왕', '황제']):
-            return 'person'
-        if any(token in text for token in ['수군', '군사', '부대', '관청', '정부', '사령부']):
-            return 'organization'
-        return 'entity'
+        
+        # 사건: 전투, 전쟁, 난, 사화 등
+        if any(token in text for token in ['대첩', '전투', '전쟁', '사건', '해전', '봉기', '난', '사화', '정변']):
+            return '사건'
+        
+        # 인물: 직위/호칭으로 끝나는 경우
+        if any(text.endswith(suffix) for suffix in ['장군', '공', '대감', '장관', '후', '왕', '황제', '대왕', '선생', '공주', '옹주']):
+            return '인물'
+        
+        # 지명: 지리적 접미사를 가진 짧은 이름
+        if any(token in text for token in ['성', '포', '도', '섬', '산', '강', '현', '군', '읍', '면', '리']) and len(text) <= 6:
+            return '지명'
+        
+        # 단체: 조직 관련 키워드
+        if any(token in text for token in ['수군', '군사', '부대', '관청', '정부', '사령부', '조직', '회', '부']):
+            return '단체'
+        
+        # 문헌: 서적 관련 키워드
+        if any(token in text for token in ['일기', '기록', '실록', '문집', '서', '록', '지', '전']):
+            return '문헌'
+        
+        # 유적: 건물/장소 관련 키워드
+        if any(token in text for token in ['사', '궁', '전', '문', '탑', '비', '묘', '릉']):
+            return '유적'
+        
+        # 기본값: 미분류
+        return '미분류'
     
     def _extract_snippet(self, content: str, target: Optional[str] = None, window: int = 200, include_surrounding_sentences: bool = True) -> str:
         """문장 단위로 snippet 추출 (앞뒤 문장 포함)
@@ -1081,31 +1098,34 @@ class KnowledgeGraphExtractor:
         ArangoDB 키 규칙:
         - 영문자, 숫자, 언더스코어, 하이픈만 허용
         - 한글/한자 등 유니코드 문자는 해시로 변환
+        
+        충돌 방지:
+        - SHA256 해시 사용 (MD5보다 충돌 확률 낮음)
+        - 해시 길이 24자 사용 (5만개 엔티티에서 충돌 확률 거의 0)
         """
         if not text or not isinstance(text, str):
-            return 'unknown'
+            return 'unknown_' + hashlib.sha256(str(id(text)).encode()).hexdigest()[:8]
         
         # 1. 공백을 언더스코어로 변환
         normalized = text.replace(' ', '_')
         
-        # 2. ASCII만 남기고 나머지는 제거 (임시)
+        # 2. ASCII 영숫자/언더스코어/하이픈만 남기고 나머지는 제거
         ascii_only = re.sub(r'[^a-zA-Z0-9_-]', '', normalized)
         
-        # 3. ASCII만으로 충분한 경우 (영문 엔티티)
-        if ascii_only and len(ascii_only) >= 3:
+        # 3. 실제 영숫자가 3자 이상인 경우만 ASCII 키 사용
+        # (언더스코어/하이픈만 있는 경우는 해시로 처리)
+        alphanumeric_only = re.sub(r'[^a-zA-Z0-9]', '', ascii_only)
+        if alphanumeric_only and len(alphanumeric_only) >= 3:
             # 영문자로 시작하도록
             if not ascii_only[0].isalpha():
                 ascii_only = 'K_' + ascii_only
             return ascii_only[:128]
         
         # 4. 한글/특수문자 포함 시 → 해시 기반 키 생성
-        # MD5 해시의 앞 12자 사용 (충돌 확률 극히 낮음)
-        hash_part = hashlib.md5(text.encode('utf-8')).hexdigest()[:12]
+        # SHA256 해시의 앞 24자 사용 (충돌 확률 극히 낮음: 1/2^96)
+        hash_part = hashlib.sha256(text.encode('utf-8')).hexdigest()[:24]
         
-        # 원본 텍스트의 일부를 포함 (가독성)
-        prefix = ascii_only[:8] if ascii_only else 'entity'
-        
-        return f"K_{prefix}_{hash_part}"
+        return f"K_{hash_part}"
 
 
 class ArangoGraphDB:
@@ -1165,6 +1185,8 @@ class ArangoGraphDB:
             print("  2. 설치 후 서비스 시작")
             print("  3. 기본 설정: localhost:8529, 사용자: root")
             self.db = None
+        
+        self.debug_entity_names: List[str] = []
     
     def _setup_collections(self, reset: bool = False):
         """컬렉션 및 그래프 설정
@@ -1310,15 +1332,28 @@ class ArangoGraphDB:
         inserted = 0
         linked = 0
         
+        debug_targets = getattr(self, 'debug_entity_names', []) or []
+        
         for entity in entities:
             try:
                 entity_name = entity.get('name', '')
+                is_debug = bool(entity_name and entity_name in debug_targets)
+                if is_debug:
+                    print(f"\n[DEBUG][insert_entities] '{entity_name}' 원본: {entity}")
                 
                 # type 처리 로직:
                 # 1. LLM이 추론한 type이 있으면 그것을 우선 사용
                 # 2. type이 없으면 백과사전에서 가져오기 시도
                 entity_type = entity.get('type', '')
                 llm_inferred_type = entity_type  # LLM이 추론한 타입 보존
+                is_canonical = False
+                sources = entity.get('sources', [])
+                if isinstance(sources, list):
+                    is_canonical = any(
+                        (src.get('type') == '한국민족문화대백과사전')
+                        for src in sources
+                        if isinstance(src, dict)
+                    )
                 
                 if not entity_type or entity_type == '미분류':
                     # 이름으로 기존 엔티티 검색하여 type 가져오기
@@ -1326,6 +1361,8 @@ class ArangoGraphDB:
                     if existing_entity and existing_entity.get('type'):
                         entity_type = existing_entity.get('type')
                         entity['type'] = entity_type
+                        if is_debug:
+                            print(f"  [DEBUG] DB에서 타입 추론 → {entity_type}")
                 elif entity_type and entity_type != '미분류':
                     # LLM이 type을 추론했고, 백과사전에 같은 이름이 있는 경우
                     # type이 다르면 별개 엔티티로 처리
@@ -1340,15 +1377,20 @@ class ArangoGraphDB:
                             # type이 같으면 → 동일 엔티티, 병합 대상
                             pass
                 
-                # _key가 없으면 자동 생성 (name + type 조합으로 동음이의어 구분)
+                # _key가 없으면 자동 생성 (name + category 조합으로 동음이의어 구분)
+                # category(항목 분야)는 항상 존재하므로 type보다 안정적
                 if '_key' not in entity or not entity['_key']:
-                    # 동음이의어 구분을 위해 name_type 형태로 키 생성
-                    if entity_type and entity_type != '미분류':
+                    category = entity.get('category', '')
+                    if category:
+                        key_source = f"{entity_name}_{category}"
+                    elif entity_type and entity_type != '미분류':
                         key_source = f"{entity_name}_{entity_type}"
                     else:
                         key_source = entity_name
                     entity['_key'] = self._sanitize_key(key_source)
                 entity_key = entity['_key']
+                if is_debug:
+                    print(f"  [DEBUG] 생성된 key: {entity_key}")
                 
                 # 1. 정확히 일치하는 엔티티가 있는지 확인
                 if collection.has(entity_key):
@@ -1356,6 +1398,8 @@ class ArangoGraphDB:
                     merged = self._merge_entity_records(existing, entity)
                     collection.update(merged)
                     inserted += 1
+                    if is_debug:
+                        print("  [DEBUG] 동일 키 존재 → 병합 업데이트")
                     continue
                 
                 # 2. 별칭(aliases)으로 매칭 시도
@@ -1363,36 +1407,78 @@ class ArangoGraphDB:
                     collection, entity_name
                 )
                 if existing_by_alias:
-                    # 기존 엔티티에 별칭 추가 및 병합
-                    merged = self._merge_entity_records(existing_by_alias, entity)
-                    # 새 이름을 별칭에 추가
-                    aliases = set(merged.get('aliases', []) or [])
-                    aliases.add(entity_name)
-                    merged['aliases'] = list(aliases)
-                    collection.update(merged)
-                    linked += 1
-                    continue
-                
-                # 3. 유사도 매칭 (한글 엔티티만, threshold 0.8)
-                if len(entity_name) >= 2:
-                    similar = self._find_similar_entity_in_db(
-                        collection, entity_name, threshold=0.8
-                    )
-                    if similar:
-                        merged = self._merge_entity_records(similar, entity)
+                    existing_type = existing_by_alias.get('type')
+                    can_merge = False
+                    if is_canonical:
+                        can_merge = (not existing_type) or (not entity_type) or (existing_type == entity_type)
+                    else:
+                        if not entity_type or entity_type == '미분류':
+                            entity['type'] = existing_type
+                            entity_type = existing_type
+                        if entity_type and existing_type and existing_type != entity_type:
+                            can_merge = False
+                        else:
+                            can_merge = True
+                    if can_merge:
+                        merged = self._merge_entity_records(existing_by_alias, entity)
                         aliases = set(merged.get('aliases', []) or [])
                         aliases.add(entity_name)
                         merged['aliases'] = list(aliases)
                         collection.update(merged)
                         linked += 1
+                        if is_debug:
+                            print("  [DEBUG] 별칭 매칭 → 병합")
                         continue
+                
+                # 3. 유사도 매칭 (비정규 엔티티만, 정규 엔티티는 건너뜀)
+                # 한국민족문화대백과사전 엔티티는 이미 정제되어 있으므로 유사도 매칭 불필요
+                if not is_canonical and len(entity_name) >= 2:
+                    # 엔티티 맥락 정보 추출 (sources에서 snippet 등)
+                    entity_context = ''
+                    if sources:
+                        for src in sources:
+                            if isinstance(src, dict):
+                                snippet = src.get('snippet', '') or src.get('context', '')
+                                if snippet:
+                                    entity_context = snippet
+                                    break
+                    
+                    similar = self._find_similar_entity_in_db(
+                        collection, entity_name, threshold=0.8,
+                        entity_context=entity_context, entity_type=entity_type
+                    )
+                    if similar:
+                        existing_type = similar.get('type')
+                        can_merge = False
+                        if not entity_type or entity_type == '미분류':
+                            entity['type'] = existing_type
+                            entity_type = existing_type
+                        if existing_type and entity_type and existing_type != entity_type:
+                            can_merge = False
+                        else:
+                            can_merge = True
+                        if can_merge:
+                            merged = self._merge_entity_records(similar, entity)
+                            aliases = set(merged.get('aliases', []) or [])
+                            aliases.add(entity_name)
+                            merged['aliases'] = list(aliases)
+                            collection.update(merged)
+                            linked += 1
+                            if is_debug:
+                                print("  [DEBUG] 유사 매칭 → 병합")
+                            continue
                 
                 # 4. 새 엔티티 삽입
                 collection.insert(entity)
                 inserted += 1
+                if is_debug:
+                    print("  [DEBUG] 새 엔티티로 삽입 완료")
                 
             except Exception as e:
                 print(f"엔티티 삽입 오류 ({entity.get('name', 'unknown')}): {e}")
+                if is_debug:
+                    import traceback
+                    traceback.print_exc()
         
         if linked > 0:
             print(f"{inserted}개 삽입, {linked}개 기존 엔티티에 연결됨")
@@ -1436,9 +1522,21 @@ class ArangoGraphDB:
             return None
     
     def _find_similar_entity_in_db(
-        self, collection, name: str, threshold: float = 0.8
+        self, collection, name: str, threshold: float = 0.8,
+        entity_context: str = '', entity_type: str = ''
     ) -> Optional[Dict]:
-        """유사도 기반 엔티티 찾기 (DB에서)"""
+        """유사도 기반 엔티티 찾기 (DB에서)
+        
+        Args:
+            collection: 엔티티 컬렉션
+            name: 찾을 엔티티 이름
+            threshold: 유사도 임계값
+            entity_context: 엔티티의 맥락 정보 (LLM이 추출한 문장 등)
+            entity_type: 엔티티 타입
+            
+        Returns:
+            매칭된 엔티티 또는 None
+        """
         try:
             # 공백 제거 버전으로도 검색
             name_no_space = name.replace(' ', '')
@@ -1469,14 +1567,113 @@ class ArangoGraphDB:
                     query,
                     bind_vars={'@collection': 'entities', 'name': name}
                 )
-                results = list(cursor)
-                if results:
-                    # 가장 짧은 이름 차이를 가진 것 선택
-                    best = min(results, key=lambda x: abs(len(x['name']) - len(name)))
+                candidates = list(cursor)
+                
+                if candidates:
+                    # 의미적 유사성 검증이 필요한 경우
+                    if entity_context or entity_type:
+                        verified = self._verify_semantic_similarity(
+                            name, entity_context, entity_type, candidates
+                        )
+                        if verified:
+                            return verified
+                    else:
+                        # 맥락 정보 없으면 이름 길이가 가장 비슷한 것 선택
+                        best = min(candidates, key=lambda x: abs(len(x['name']) - len(name)))
                     return best
             
             return None
         except Exception:
+            return None
+    
+    def _verify_semantic_similarity(
+        self, 
+        name: str, 
+        context: str, 
+        entity_type: str,
+        candidates: List[Dict]
+    ) -> Optional[Dict]:
+        """후보 엔티티들 중 의미적으로 가장 유사한 것 찾기
+        
+        검증 기준:
+        1. 타입 일치 여부
+        2. 정의/요약과의 키워드 겹침
+        3. 카테고리 유사성
+        
+        Args:
+            name: 찾는 엔티티 이름
+            context: 엔티티가 추출된 맥락 (문장)
+            entity_type: 추출된 엔티티의 타입
+            candidates: 이름이 유사한 후보 엔티티들
+            
+        Returns:
+            의미적으로 가장 유사한 엔티티 또는 None
+        """
+        if not candidates:
+            return None
+        
+        best_candidate = None
+        best_score = 0.0
+        
+        # 맥락에서 키워드 추출 (간단한 토큰화)
+        context_keywords = set()
+        if context:
+            # 한글, 영문, 숫자만 추출하여 토큰화
+            import re
+            tokens = re.findall(r'[가-힣a-zA-Z0-9]+', context.lower())
+            context_keywords = set(t for t in tokens if len(t) >= 2)
+        
+        for candidate in candidates:
+            score = 0.0
+            
+            # 1. 타입 일치 검사 (가중치: 0.4)
+            cand_type = candidate.get('type', '')
+            if entity_type and cand_type:
+                if entity_type == cand_type:
+                    score += 0.4
+                elif entity_type in cand_type or cand_type in entity_type:
+                    score += 0.2
+            elif not entity_type:
+                # 타입 정보 없으면 타입 검사 건너뜀
+                score += 0.2
+            
+            # 2. 정의/요약과 맥락의 키워드 겹침 (가중치: 0.4)
+            if context_keywords:
+                cand_text = (
+                    (candidate.get('definition') or '') + ' ' +
+                    (candidate.get('summary') or '') + ' ' +
+                    (candidate.get('category') or '')
+                ).lower()
+                
+                cand_tokens = set(re.findall(r'[가-힣a-zA-Z0-9]+', cand_text))
+                cand_tokens = set(t for t in cand_tokens if len(t) >= 2)
+                
+                if cand_tokens:
+                    overlap = len(context_keywords & cand_tokens)
+                    overlap_ratio = overlap / max(len(context_keywords), 1)
+                    score += 0.4 * min(overlap_ratio * 2, 1.0)  # 최대 0.4
+            else:
+                # 맥락 정보 없으면 키워드 검사 건너뜀
+                score += 0.2
+            
+            # 3. 이름 유사도 (가중치: 0.2)
+            name_len_diff = abs(len(name) - len(candidate.get('name', '')))
+            if name_len_diff == 0:
+                score += 0.2
+            elif name_len_diff <= 2:
+                score += 0.15
+            elif name_len_diff <= 4:
+                score += 0.1
+            
+            # 최고 점수 갱신
+            if score > best_score:
+                best_score = score
+                best_candidate = candidate
+        
+        # 임계값 이상이면 반환
+        if best_score >= 0.5:
+            return best_candidate
+        
             return None
     
     def _merge_entity_records(self, existing: Dict, incoming: Dict) -> Dict:
@@ -1536,12 +1733,22 @@ class ArangoGraphDB:
         skipped_no_subject = 0
         skipped_no_object = 0
         errors = 0
+        subject_skip_samples: List[Dict] = []
+        object_skip_samples: List[Dict] = []
         
-        # 엔티티 이름 → 키 매핑이 없으면 DB에서 로드
+        # 엔티티 정보 매핑 로드 (동명이의어 처리용)
         if entity_key_map is None:
             print("  엔티티 키 매핑 로드 중...")
             entity_key_map = self._load_entity_key_map()
             print(f"  → {len(entity_key_map)}개 엔티티 매핑 로드됨")
+        
+        # 동명이의어 처리용 확장 매핑 로드
+        entity_extended_map = self._load_entity_extended_map()
+        
+        # URL ID → key 매핑 로드 (본문 링크 매칭용)
+        url_id_map = self._load_url_id_map()
+        if url_id_map:
+            print(f"  → {len(url_id_map)}개 URL ID 매핑 로드됨")
         
         total = len(relations)
         print(f"  관계 삽입 시작: {total}개")
@@ -1556,29 +1763,114 @@ class ArangoGraphDB:
                     skipped += 1
                     continue
                 
-                # 매핑에서 키 찾기 (빠름!)
-                from_key = entity_key_map.get(subject)
-                to_key = entity_key_map.get(obj)
+                # Subject 키 찾기
+                subject_type = relation.get('subject_type') or ''
+                object_type = relation.get('object_type') or ''
                 
-                # 매핑에 없으면 DB 검색 (느림)
+                # Subject 키 찾기
+                # subject_field(항목 분야)가 있으면 이를 우선 사용
+                from_key = None
+                subject_field = relation.get('subject_field', '')
+                subject_map = entity_key_map.get(subject)
+                if subject_map:
+                    # 1. subject_field(항목 분야)로 먼저 찾기
+                    if subject_field and subject_field in subject_map:
+                        from_key = subject_map[subject_field]
+                    # 2. subject_type으로 찾기
+                    elif subject_type and subject_type in subject_map:
+                        from_key = subject_map[subject_type]
+                    # 3. 힌트 기반 매칭
+                    else:
+                        from_key = self._select_best_key_from_map(
+                            subject,
+                            subject_map,
+                            entity_extended_map,
+                            hanja_hint=relation.get('subject_hanja', ''),
+                            field_hint=subject_field
+                        )
+                
+                if not from_key:
+                    # 동명이의어 처리: 추가 정보로 매칭
+                    from_key = self._find_entity_key_with_hints(
+                        entity_extended_map,
+                        subject,
+                        subject_type,
+                        relation.get('subject_hanja', ''),
+                        subject_field
+                    )
                 if not from_key:
                     from_key = self._find_entity_key(entities_col, subject)
+                
+                # Object 키 찾기
+                to_key = None
+                
+                # 0. URL ID로 먼저 찾기 (본문 링크에서 가장 정확한 매칭)
+                object_url_id = relation.get('object_url_id', '')
+                if object_url_id and url_id_map:
+                    to_key = url_id_map.get(object_url_id)
+                
+                # 1. object_field(항목 분야)가 있으면 이를 우선 사용
                 if not to_key:
+                    object_field = relation.get('object_field', '')
+                    object_map = entity_key_map.get(obj)
+                    if object_map:
+                        # 1-1. object_field(항목 분야)로 먼저 찾기
+                        if object_field and object_field in object_map:
+                            to_key = object_map[object_field]
+                        # 1-2. object_type으로 찾기
+                        elif object_type and object_type in object_map:
+                            to_key = object_map[object_type]
+                        # 1-3. 힌트 기반 매칭
+                        else:
+                            to_key = self._select_best_key_from_map(
+                                obj,
+                                object_map,
+                                entity_extended_map,
+                                hanja_hint=relation.get('object_hanja', ''),
+                                field_hint=object_field
+                            )
+                if not to_key:
+                    # 2. 동명이의어 처리: 추가 정보로 매칭
+                    to_key = self._find_entity_key_with_hints(
+                        entity_extended_map,
+                        obj,
+                        object_type,
+                        relation.get('object_hanja', ''),
+                        relation.get('object_field', '')
+                    )
+                if not to_key:
+                    # 3. 이름으로 직접 검색
                     to_key = self._find_entity_key(entities_col, obj)
                 
                 if not from_key:
                     skipped_no_subject += 1
                     skipped += 1
-                    # 처음 5개만 샘플 출력
                     if skipped_no_subject <= 5:
                         print(f"    [subject없음] '{subject}' → '{obj}'")
+                    if len(subject_skip_samples) < 5:
+                        subject_skip_samples.append({
+                            'subject': subject,
+                            'subject_type': subject_type,
+                            'subject_hanja': relation.get('subject_hanja', ''),
+                            'object': obj,
+                            'object_type': object_type,
+                            'available_types': list(subject_map.keys()) if subject_map else []
+                        })
                     continue
                 if not to_key:
                     skipped_no_object += 1
                     skipped += 1
-                    # 처음 5개만 샘플 출력
                     if skipped_no_object <= 5:
                         print(f"    [object없음] '{subject}' → '{obj}'")
+                    if len(object_skip_samples) < 5:
+                        object_skip_samples.append({
+                            'object': obj,
+                            'object_type': object_type,
+                            'object_hanja': relation.get('object_hanja', ''),
+                            'subject': subject,
+                            'subject_type': subject_type,
+                            'available_types': list(object_map.keys()) if object_map else []
+                        })
                     continue
                 
                 # 진행 상황 출력 (1,000개마다)
@@ -1619,23 +1911,54 @@ class ArangoGraphDB:
             print(f"{inserted}개 관계 삽입 (건너뜀: {skipped} - subject없음:{skipped_no_subject}, object없음:{skipped_no_object})")
         else:
             print(f"{inserted}개 관계 삽입 완료")
+
+        if subject_skip_samples:
+            print("  [subject없음 샘플 상세]")
+            for sample in subject_skip_samples:
+                print(f"    - subject='{sample['subject']}' (type:{sample['subject_type']} / hanja:{sample['subject_hanja']}) → object='{sample['object']}' (type:{sample['object_type']})")
+                if sample['available_types']:
+                    print(f"      · DB상의 타입 후보: {sample['available_types']}")
+                else:
+                    print("      · DB에 동일 이름의 엔티티 없음")
+        if object_skip_samples:
+            print("  [object없음 샘플 상세]")
+            for sample in object_skip_samples:
+                print(f"    - object='{sample['object']}' (type:{sample['object_type']} / hanja:{sample['object_hanja']}) ← subject='{sample['subject']}' (type:{sample['subject_type']})")
+                if sample['available_types']:
+                    print(f"      · DB상의 타입 후보: {sample['available_types']}")
+                else:
+                    print("      · DB에 동일 이름의 엔티티 없음")
         return inserted
     
-    def _load_entity_key_map(self) -> Dict[str, str]:
-        """DB에서 모든 엔티티의 이름 → _key 매핑 로드"""
-        entity_map = {}
+    def _load_entity_key_map(self) -> Dict[str, Dict[str, str]]:
+        """DB에서 모든 엔티티의 이름 → {category/type: _key} 매핑 로드
+        
+        category(항목 분야)를 우선 사용하고, 없으면 type 사용
+        """
+        entity_map: Dict[str, Dict[str, str]] = {}
         try:
             query = """
             FOR e IN entities
-                RETURN {name: e.name, key: e._key}
+                RETURN {name: e.name, type: e.type, category: e.category, key: e._key}
             """
             cursor = self.db.aql.execute(query)
             sample_names = []
             for doc in cursor:
-                if doc.get('name') and doc.get('key'):
-                    entity_map[doc['name']] = doc['key']
-                    if len(sample_names) < 5:
-                        sample_names.append(doc['name'])
+                name = doc.get('name')
+                key = doc.get('key')
+                category = doc.get('category') or ''
+                ent_type = doc.get('type') or ''
+                # category 우선, 없으면 type 사용
+                map_key = category or ent_type or ''
+                if name and key:
+                    if name not in entity_map:
+                        entity_map[name] = {}
+                    entity_map[name][map_key] = key
+                    # type으로도 매핑 추가 (호환성)
+                    if ent_type and ent_type != map_key:
+                        entity_map[name][ent_type] = key
+                    if len(sample_names) < 5 and name not in sample_names:
+                        sample_names.append(name)
             
             # 디버깅: 샘플 엔티티 이름 출력
             if sample_names:
@@ -1654,6 +1977,197 @@ class ArangoGraphDB:
         except Exception as e:
             print(f"  ⚠ 엔티티 매핑 로드 오류: {e}")
         return entity_map
+    
+    def _load_entity_extended_map(self) -> Dict[str, List[Dict]]:
+        """동명이의어 처리용 확장 매핑 로드
+        
+        Returns:
+            name → [{key, type, hanja, category}, ...] 매핑
+        """
+        extended_map = {}
+        try:
+            query = """
+            FOR e IN entities
+                RETURN {
+                    name: e.name,
+                    key: e._key,
+                    type: e.type,
+                    hanja: e.hanja,
+                    category: e.category
+                }
+            """
+            cursor = self.db.aql.execute(query)
+            for doc in cursor:
+                name = doc.get('name', '')
+                if not name:
+                    continue
+                if name not in extended_map:
+                    extended_map[name] = []
+                extended_map[name].append({
+                    'key': doc.get('key', ''),
+                    'type': doc.get('type', ''),
+                    'hanja': doc.get('hanja', ''),
+                    'category': doc.get('category', '')
+                })
+        except Exception as e:
+            print(f"  ⚠ 확장 매핑 로드 오류: {e}")
+        return extended_map
+    
+    def _load_url_id_map(self) -> Dict[str, str]:
+        """URL ID → _key 매핑 로드 (본문 링크 매칭용)
+        
+        Returns:
+            url_id (예: 'E0044900') → _key 매핑
+        """
+        url_map = {}
+        try:
+            query = """
+            FOR e IN entities
+                FILTER e.url != null AND e.url != ''
+                RETURN {url: e.url, key: e._key}
+            """
+            cursor = self.db.aql.execute(query)
+            import re
+            for doc in cursor:
+                url = doc.get('url', '')
+                key = doc.get('key', '')
+                if url and key:
+                    # URL에서 ID 추출: https://encykorea.aks.ac.kr/Article/E0044900 → E0044900
+                    match = re.search(r'/([A-Z]\d+)/?$', url)
+                    if match:
+                        url_id = match.group(1)
+                        url_map[url_id] = key
+        except Exception as e:
+            print(f"  ⚠ URL ID 매핑 로드 오류: {e}")
+        return url_map
+    
+    def _find_entity_key_with_hints(
+        self,
+        extended_map: Dict[str, List[Dict]],
+        name: str,
+        type_hint: str = '',
+        hanja_hint: str = '',
+        field_hint: str = ''
+    ) -> Optional[str]:
+        """동명이의어 처리: 추가 힌트로 정확한 엔티티 찾기
+        
+        Args:
+            extended_map: name → [{key, type, hanja, category}, ...] 매핑
+            name: 엔티티 이름
+            type_hint: 항목 유형 힌트 (예: '인물', '사건')
+            hanja_hint: 원어(한자) 힌트 (예: '宣祖')
+            field_hint: 항목 분야 힌트 (예: '역사/조선시대사')
+            
+        Returns:
+            매칭된 엔티티 _key, 없으면 None
+        """
+        if name not in extended_map:
+            return None
+        
+        candidates = extended_map[name]
+        
+        # 후보가 하나면 바로 반환
+        if len(candidates) == 1:
+            return candidates[0]['key']
+        
+        # 여러 후보가 있으면 힌트로 매칭
+        best_match = None
+        best_score = 0
+        
+        for candidate in candidates:
+            score = 0
+            
+            # 분야(카테고리) 매칭 - 항상 존재하므로 가장 신뢰도 높음
+            if field_hint and candidate.get('category'):
+                cand_cat = candidate['category'].lower()
+                hint_field = field_hint.lower()
+                if hint_field == cand_cat:
+                    score += 15  # 정확히 일치
+                elif hint_field in cand_cat or cand_cat in hint_field:
+                    score += 10  # 부분 일치
+            
+            # 원어(한자) 매칭 - 정확한 식별자
+            if hanja_hint and candidate.get('hanja'):
+                if hanja_hint == candidate['hanja']:
+                    score += 8
+                elif hanja_hint in candidate['hanja'] or \
+                    candidate['hanja'] in hanja_hint:
+                    score += 4
+            
+            # 타입 매칭 - 보조 정보
+            if type_hint and candidate.get('type'):
+                cand_type = candidate['type'].lower()
+                hint_type = type_hint.lower()
+                if hint_type in cand_type or cand_type in hint_type:
+                    score += 3
+            
+            if score > best_score:
+                best_score = score
+                best_match = candidate['key']
+        
+        return best_match
+    
+    def _select_best_key_from_map(
+        self,
+        name: str,
+        type_map: Dict[str, str],
+        extended_map: Dict[str, List[Dict]],
+        hanja_hint: Optional[str] = None,
+        field_hint: Optional[str] = None
+    ) -> Optional[str]:
+        """type_map(name)에서 한자/분야 힌트 기반으로 가장 적합한 키 선택"""
+        if not type_map:
+            return None
+        
+        candidates = []
+        ext_entries = extended_map.get(name, [])
+        
+        for ent_type, key in type_map.items():
+            meta = None
+            for entry in ext_entries:
+                if entry.get('key') == key:
+                    meta = entry
+                    break
+            candidates.append({
+                'key': key,
+                'type': ent_type,
+                'hanja': meta.get('hanja') if meta else '',
+                'category': meta.get('category') if meta else ''
+            })
+        
+        best_key = None
+        best_score = -1
+        hanja_hint = hanja_hint or ''
+        field_hint = field_hint or ''
+        
+        for cand in candidates:
+            score = 0
+            # 분야(카테고리) 매칭 - 가장 신뢰도 높음
+            if field_hint and cand['category']:
+                cand_cat = cand['category'].lower()
+                hint_field = field_hint.lower()
+                if hint_field == cand_cat:
+                    score += 15  # 정확히 일치
+                elif hint_field in cand_cat or cand_cat in hint_field:
+                    score += 10  # 부분 일치
+            # 원어(한자) 매칭
+            if hanja_hint and cand['hanja']:
+                if hanja_hint == cand['hanja']:
+                    score += 8
+                elif hanja_hint in cand['hanja'] or cand['hanja'] in hanja_hint:
+                    score += 4
+            if cand['type'] == '' and best_score < 0:
+                # 기본값 후보
+                best_key = cand['key']
+                best_score = 0
+            if score > best_score:
+                best_score = score
+                best_key = cand['key']
+        
+        if best_key:
+            return best_key
+        # 점수 없다면 첫 번째 값 반환
+        return next(iter(type_map.values()), None)
     
     def _find_entity_key(self, collection, name: str) -> Optional[str]:
         """엔티티 이름으로 _key 찾기"""
@@ -1772,7 +2286,7 @@ class ArangoGraphDB:
             return []
     
     def query_entity(self, entity_name: str) -> Optional[Dict]:
-        """엔티티 조회 (해시 키 사용)
+        """엔티티 조회 (name 필드로 검색)
         
         Args:
             entity_name: 엔티티 이름 (한글 가능)
@@ -1781,17 +2295,39 @@ class ArangoGraphDB:
             엔티티 정보 또는 None
             
         Note:
-            entity_name을 해시로 변환하여 검색합니다.
-            같은 이름 → 항상 같은 해시 (MD5의 결정론적 특성)
+            name 필드로 검색하여 동음이의어/다른 키 생성 방식에도 대응합니다.
         """
         if not self.db:
             return None
         
         try:
-            collection = self.db.collection('entities')
-            key = self._sanitize_key(entity_name)
-            return collection.get(key)
-        except Exception:
+            # name 필드로 검색
+            query = """
+            FOR e IN entities
+                FILTER e.name == @name
+                LIMIT 1
+                RETURN e
+            """
+            cursor = self.db.aql.execute(query, bind_vars={'name': entity_name})
+            results = list(cursor)
+            
+            if results:
+                return results[0]
+            
+            # name으로 못 찾으면 canonical_name으로 시도
+            query2 = """
+            FOR e IN entities
+                FILTER e.canonical_name == @name
+                LIMIT 1
+                RETURN e
+            """
+            cursor = self.db.aql.execute(query2, bind_vars={'name': entity_name})
+            results = list(cursor)
+            
+            return results[0] if results else None
+            
+        except Exception as e:
+            print(f"엔티티 조회 오류: {e}")
             return None
     
     def search_entities_by_name(self, entity_name: str) -> List[Dict]:
@@ -1823,6 +2359,32 @@ class ArangoGraphDB:
             print(f"name 검색 오류: {e}")
             return []
     
+    def get_entity_by_name(self, entity_name: str) -> Dict:
+        """이름으로 엔티티 조회 (첫 번째 매칭)
+        
+        Args:
+            entity_name: 엔티티 이름
+            
+        Returns:
+            엔티티 정보 딕셔너리 (없으면 None)
+        """
+        if not self.db:
+            return None
+        
+        try:
+            query = """
+            FOR e IN entities
+                FILTER e.name == @name
+                LIMIT 1
+                RETURN e
+            """
+            cursor = self.db.aql.execute(query, bind_vars={'name': entity_name})
+            results = list(cursor)
+            return results[0] if results else None
+        except Exception as e:
+            print(f"엔티티 조회 오류: {e}")
+            return None
+    
     def query_neighbors(self, entity_name: str, depth: int = 1) -> Dict:
         """엔티티의 이웃 조회
         
@@ -1834,16 +2396,57 @@ class ArangoGraphDB:
             이웃 정보 (엔티티와 관계)
             
         Note:
-            entity_name을 해시로 변환하여 검색합니다.
-            같은 이름 → 항상 같은 해시 (MD5의 결정론적 특성)
+            name 필드로 먼저 엔티티를 찾고, 해당 _key로 그래프 탐색합니다.
+            동음이의어가 있을 경우 관계가 가장 많은 엔티티를 우선 선택합니다.
         """
         if not self.db:
             return {'entities': [], 'relations': []}
         
-        # 방법 1: 해시 키로 직접 조회 (빠름)
-        key = self._sanitize_key(entity_name)
+        # 방법 1: name 필드로 엔티티 찾기 (동음이의어 대응 - 관계 많은 순)
+        try:
+            # 동일 이름의 모든 엔티티를 찾고, 관계 개수로 정렬
+            find_query = """
+            FOR e IN entities
+                FILTER e.name == @name
+                LET rel_count = LENGTH(
+                    FOR r IN relations
+                        FILTER r._from == CONCAT('entities/', e._key) OR r._to == CONCAT('entities/', e._key)
+                        RETURN 1
+                )
+                SORT rel_count DESC
+                LIMIT 1
+                RETURN e._key
+            """
+            cursor = self.db.aql.execute(find_query, bind_vars={'name': entity_name})
+            keys = list(cursor)
+            
+            if not keys:
+                # name으로 못 찾으면 canonical_name으로 시도
+                find_query2 = """
+                FOR e IN entities
+                    FILTER e.canonical_name == @name
+                    LET rel_count = LENGTH(
+                        FOR r IN relations
+                            FILTER r._from == CONCAT('entities/', e._key) OR r._to == CONCAT('entities/', e._key)
+                            RETURN 1
+                    )
+                    SORT rel_count DESC
+                    LIMIT 1
+                    RETURN e._key
+                """
+                cursor = self.db.aql.execute(find_query2, bind_vars={'name': entity_name})
+                keys = list(cursor)
+            
+            if not keys:
+                # 그래도 못 찾으면 빈 결과 반환
+                return {'entities': [], 'relations': []}
+            
+            key = keys[0]
+        except Exception as e:
+            print(f"엔티티 검색 오류: {e}")
+            return {'entities': [], 'relations': []}
         
-        # AQL 쿼리
+        # 방법 2: 찾은 _key로 그래프 탐색
         query = f"""
         FOR v, e, p IN 1..{depth} ANY 'entities/{key}' relations
             RETURN {{
@@ -1859,15 +2462,76 @@ class ArangoGraphDB:
             
             entities = []
             relations = []
+            seen_entity_keys = set()  # 중복 엔티티 제거용
             
             for result in results:
                 if result['entity']:
-                    entities.append(result['entity'])
+                    entity = result['entity']
+                    entity_key = entity.get('_key', '')
+                    # 중복 엔티티 제거 (같은 엔티티가 여러 relation으로 연결될 수 있음)
+                    if entity_key and entity_key not in seen_entity_keys:
+                        entities.append(entity)
+                        seen_entity_keys.add(entity_key)
                 if result['relation']:
                     relations.append(result['relation'])
             
+            # 카테고리 분류 함수 (인물, 사건, 지명만 필터링)
+            def get_category_type(entity):
+                """엔티티의 카테고리 타입 반환 (person, event, place, None)"""
+                category = entity.get('category', '') or ''
+                entity_type = entity.get('type', '') or ''
+                cat_lower = category.lower()
+                type_lower = entity_type.lower()
+                
+                # 인물: 종교·철학/유교, 종교·철학/불교, 인물
+                if type_lower == '인물' or '인물' in cat_lower:
+                    return 'person'
+                if '유교' in category or '불교' in category:
+                    return 'person'
+                
+                # 사건: 역사/조선시대사
+                if '역사/조선시대사' in category or type_lower == '사건':
+                    return 'event'
+                
+                # 지명: 지명, 지리/인문지리, 지리/자연지리
+                if type_lower == '지명' or '지명' in cat_lower:
+                    return 'place'
+                if '지리/인문지리' in category or '지리/자연지리' in category:
+                    return 'place'
+                
+                return None
+            
+            # 카테고리별로 분류
+            categorized = {'person': [], 'event': [], 'place': []}
+            
+            for entity in entities:
+                cat_type = get_category_type(entity)
+                if cat_type:
+                    entity['_category_type'] = cat_type  # 프론트엔드에서 사용할 카테고리 타입
+                    categorized[cat_type].append(entity)
+            
+            # 각 카테고리별로 sources 개수 순으로 정렬 후 상위 2개씩 선택
+            filtered_entities = []
+            for cat_type in ['person', 'event', 'place']:
+                cat_entities = categorized[cat_type]
+                # sources 개수로 정렬
+                cat_entities.sort(key=lambda e: -len(e.get('sources', [])))
+                # 상위 2개 선택
+                filtered_entities.extend(cat_entities[:2])
+            
+            # 디버그: 필터링 결과 출력
+            if filtered_entities:
+                print(f"[query_neighbors] 카테고리별 필터링 결과 (총 {len(filtered_entities)}개):")
+                for ent in filtered_entities:
+                    cat = ent.get('category', '없음')
+                    cat_type = ent.get('_category_type', '?')
+                    src_count = len(ent.get('sources', []))
+                    print(f"  - {ent.get('name')} ({cat_type}, category: {cat}, sources: {src_count}개)")
+            else:
+                print(f"[query_neighbors] 인물/사건/지명 카테고리에 해당하는 엔티티 없음")
+            
             return {
-                'entities': entities,
+                'entities': filtered_entities,
                 'relations': relations
             }
             
@@ -1998,31 +2662,34 @@ class ArangoGraphDB:
         ArangoDB 키 규칙:
         - 영문자, 숫자, 언더스코어, 하이픈만 허용
         - 한글/한자 등 유니코드 문자는 해시로 변환
+        
+        충돌 방지:
+        - SHA256 해시 사용 (MD5보다 충돌 확률 낮음)
+        - 해시 길이 24자 사용 (5만개 엔티티에서 충돌 확률 거의 0)
         """
         if not text or not isinstance(text, str):
-            return 'unknown'
+            return 'unknown_' + hashlib.sha256(str(id(text)).encode()).hexdigest()[:8]
         
         # 1. 공백을 언더스코어로 변환
         normalized = text.replace(' ', '_')
         
-        # 2. ASCII만 남기고 나머지는 제거 (임시)
+        # 2. ASCII 영숫자/언더스코어/하이픈만 남기고 나머지는 제거
         ascii_only = re.sub(r'[^a-zA-Z0-9_-]', '', normalized)
         
-        # 3. ASCII만으로 충분한 경우 (영문 엔티티)
-        if ascii_only and len(ascii_only) >= 3:
+        # 3. 실제 영숫자가 3자 이상인 경우만 ASCII 키 사용
+        # (언더스코어/하이픈만 있는 경우는 해시로 처리)
+        alphanumeric_only = re.sub(r'[^a-zA-Z0-9]', '', ascii_only)
+        if alphanumeric_only and len(alphanumeric_only) >= 3:
             # 영문자로 시작하도록
             if not ascii_only[0].isalpha():
                 ascii_only = 'K_' + ascii_only
             return ascii_only[:128]
         
         # 4. 한글/특수문자 포함 시 → 해시 기반 키 생성
-        # MD5 해시의 앞 12자 사용 (충돌 확률 극히 낮음)
-        hash_part = hashlib.md5(text.encode('utf-8')).hexdigest()[:12]
+        # SHA256 해시의 앞 24자 사용 (충돌 확률 극히 낮음: 1/2^96)
+        hash_part = hashlib.sha256(text.encode('utf-8')).hexdigest()[:24]
         
-        # 원본 텍스트의 일부를 포함 (가독성)
-        prefix = ascii_only[:8] if ascii_only else 'entity'
-        
-        return f"K_{prefix}_{hash_part}"
+        return f"K_{hash_part}"
 
 
 class GoldenDataLoader:
@@ -2062,19 +2729,19 @@ class GoldenDataLoader:
         self._sanitize_key = self._create_sanitize_key()
     
     def _create_sanitize_key(self):
-        """키 정규화 함수 생성"""
+        """키 정규화 함수 생성 (SHA256 24자)"""
         def sanitize(text: str) -> str:
             if not text or not isinstance(text, str):
-                return 'unknown'
+                return 'unknown_' + hashlib.sha256(str(id(text)).encode()).hexdigest()[:8]
             normalized = text.replace(' ', '_')
             ascii_only = re.sub(r'[^a-zA-Z0-9_-]', '', normalized)
             if ascii_only and len(ascii_only) >= 3:
                 if not ascii_only[0].isalpha():
                     ascii_only = 'K_' + ascii_only
                 return ascii_only[:128]
-            hash_part = hashlib.md5(text.encode('utf-8')).hexdigest()[:12]
-            prefix = ascii_only[:8] if ascii_only else 'entity'
-            return f"K_{prefix}_{hash_part}"
+            # SHA256 해시의 앞 24자 사용 (충돌 방지)
+            hash_part = hashlib.sha256(text.encode('utf-8')).hexdigest()[:24]
+            return f"K_{hash_part}"
         return sanitize
     
     def _normalize_entity_type(self, raw_type: str) -> str:
@@ -2637,16 +3304,20 @@ class InContextKnowledgeExtractor(KnowledgeGraphExtractor):
             for rtype, desc in self.RELATION_SCHEMA.items()
         ])
         
-        # 허용된 type 목록 (백과사전 기반)
+        # 허용된 type 목록 (한국민족문화대백과사전 기반)
         allowed_types = """
-- person: 인물 (왕, 장군, 신하, 문인 등)
-- event: 사건/전쟁 (전투, 난, 사화 등)
-- location: 장소 (지명, 성, 산, 강 등)
-- position: 관직 (통제사, 영의정 등)
-- institution: 제도/기관 (조직, 법제 등)
-- artifact: 문화재/유물 (거북선, 도자기 등)
-- document: 저술/문서 (서적, 기록 등)
-- concept: 개념/추상명사 (조상, 충의 등)"""
+- 인물: 역사적 인물, 왕, 장군, 신하, 문인, 학자 등
+- 사건: 전쟁, 전투, 난, 사화, 정변 등 역사적 사건
+- 지명: 장소, 지역, 성, 산, 강, 마을, 행정구역 등
+- 유적: 건물, 성곽, 사찰, 궁궐, 무덤 등 유적지
+- 작품: 예술작품, 불상, 그림, 음악, 문학작품 등
+- 문헌: 서적, 기록, 문서, 고서, 일기 등
+- 개념: 추상적 개념, 사상, 철학, 용어 등
+- 제도: 관직, 법령, 관청, 제도 등
+- 단체: 조직, 기관, 학교, 단체 등
+- 물품: 유물, 도구, 생활용품, 문화재 등
+- 생물: 동물, 식물 등
+- 의례·행사: 의식, 세시풍속, 제례 등"""
 
         prompt = f"""당신은 한국 역사 지식 그래프 구축을 위한 전문 AI입니다.
 입력된 텍스트에서 엔티티와 관계를 추출하여 지정된 형식으로 출력하세요.
@@ -2660,38 +3331,52 @@ class InContextKnowledgeExtractor(KnowledgeGraphExtractor):
 [참고: 관계 유형]
 {relation_desc}
 
-[추출 규칙]
-1. 이미 존재하는 엔티티 형식을 따를 것 (예: "이순신", "임진왜란")
-2. 한자(Hanja)가 병기된 경우 그대로 포함할 것 (예: "선조(宣祖)")
-3. 날짜는 구체적으로 명시할 것 (예: "1592년 4월 14일")
-4. 의미 없는 일반 명사는 제외할 것 (예: "사람", "전쟁", "일")
-5. 숫자만 있는 엔티티는 제외할 것 (예: "1", "10")
-6. 엔티티 유형은 반드시 괄호 안에 명시할 것
+[추출 규칙 - 반드시 준수]
+1. 엔티티는 반드시 고유명사만 추출할 것 (인물명, 지명, 사건명 등)
+2. 문장이나 구절을 엔티티로 추출하지 말 것
+   - ❌ 잘못된 예: "이순신과 함께 진을 쳤음", "이순신 죄책", "통제사 이순신"
+   - ✓ 올바른 예: "이순신", "한산도", "임진왜란"
+3. 직책+이름은 이름만 추출할 것
+   - ❌ 잘못된 예: "통제사 이순신", "영의정 류성룡"
+   - ✓ 올바른 예: "이순신", "류성룡"
+4. 수식어나 설명이 붙은 경우 핵심 명사만 추출할 것
+   - ❌ 잘못된 예: "노량 해전 승리", "이순신 전사"
+   - ✓ 올바른 예: "노량해전", "이순신"
+5. 한자가 병기된 경우 한글만 추출할 것 (예: "선조" not "선조(宣祖)")
+6. 날짜는 엔티티로 추출하지 말 것
+7. 의미 없는 일반 명사는 제외할 것 (예: "사람", "전쟁", "일", "것")
+8. 숫자만 있는 엔티티는 제외할 것 (예: "1", "10")
+9. 엔티티 유형은 반드시 괄호 안에 명시할 것
 
 [출력 형식]
-엔티티명(type) | 관계 | 엔티티명(type)
+엔티티명(타입) | 관계 | 엔티티명(타입)
 
 [예시 1]
 입력: "이순신은 한산도에서 왜군을 격파했다."
 출력:
-이순신(person) | 지휘 | 한산도대첩(event)
-한산도대첩(event) | 발생_장소 | 한산도(location)
+이순신(인물) | 지휘 | 한산도대첩(사건)
+한산도대첩(사건) | 발생_장소 | 한산도(지명)
 
 [예시 2]
 입력: "선조가 의주로 피난하였다."
 출력:
-선조(person) | 피난 | 의주(location)
+선조(인물) | 피난 | 의주(지명)
 
 [예시 3]
 입력: "권율은 행주산성에서 왜군을 물리쳤다."
 출력:
-권율(person) | 지휘 | 행주대첩(event)
-행주대첩(event) | 발생_장소 | 행주산성(location)
+권율(인물) | 지휘 | 행주대첩(사건)
+행주대첩(사건) | 발생_장소 | 행주산성(유적)
 
 [예시 4]
-입력: "선조의 뜻을 이어받아 후손들이 충의를 지켰다."
+입력: "난중일기에는 이순신 장군의 기록이 담겨있다."
 출력:
-선조(concept) | 관련 | 충의(concept)
+난중일기(문헌) | 저자 | 이순신(인물)
+
+[예시 5]
+입력: "조선 수군은 거북선을 활용하여 전투에 임했다."
+출력:
+조선 수군(단체) | 사용 | 거북선(물품)
 
 [입력 텍스트]
 {text}
@@ -2700,16 +3385,34 @@ class InContextKnowledgeExtractor(KnowledgeGraphExtractor):
 """
         return prompt
     
-    # 허용된 type 목록 (백과사전 기반)
+    # 허용된 type 목록 (한국민족문화대백과사전 기반)
     ALLOWED_TYPES = {
+        '인물', '사건', '지명', '유적', '작품', '문헌', 
+        '개념', '제도', '단체', '물품', '생물', '의례·행사',
+        # 호환성을 위한 영어 타입 (한국어로 변환됨)
         'person', 'event', 'location', 'position', 
         'institution', 'artifact', 'document', 'concept', 'entity'
+    }
+    
+    # 영어 → 한국어 타입 매핑
+    TYPE_MAPPING = {
+        'person': '인물',
+        'event': '사건',
+        'location': '지명',
+        'position': '제도',
+        'institution': '단체',
+        'artifact': '물품',
+        'document': '문헌',
+        'concept': '개념',
+        'entity': '미분류',
+        'date': '미분류',  # 날짜는 타입으로 부적합
     }
     
     def _parse_entity_with_type(self, entity_str: str) -> Tuple[str, str]:
         """엔티티 문자열에서 이름과 type 추출
         
-        예: "이순신(person)" → ("이순신", "person")
+        예: "이순신(인물)" → ("이순신", "인물")
+            "이순신(person)" → ("이순신", "인물")  # 영어→한국어 변환
             "이순신" → ("이순신", "")
         """
         # 패턴: 이름(type)
@@ -2720,6 +3423,9 @@ class InContextKnowledgeExtractor(KnowledgeGraphExtractor):
             
             # 허용된 type인지 확인
             if entity_type in self.ALLOWED_TYPES:
+                # 영어 타입이면 한국어로 변환
+                if entity_type in self.TYPE_MAPPING:
+                    entity_type = self.TYPE_MAPPING[entity_type]
                 return name, entity_type
             else:
                 # 허용되지 않은 type이면 빈 문자열 반환

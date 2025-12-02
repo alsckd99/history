@@ -20,6 +20,13 @@ export interface EntityItem {
   score: number;
 }
 
+export interface RelationItem {
+  start: number;
+  from: string;
+  to: string;
+  label?: string;
+}
+
 export interface KeywordWindow {
   video_id: string;
   start: number | null;
@@ -27,6 +34,7 @@ export interface KeywordWindow {
   keywords: KeywordItem[];
   entities: { name: string; score: number }[];
   mapped_entities: EntityItem[];
+  relations?: RelationItem[];  // 시간에 따른 키워드 연결 관계
   keyword_path?: string;
   slice_count: number;
 }

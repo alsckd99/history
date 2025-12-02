@@ -1,4 +1,5 @@
 from typing import List, Dict, Any, Optional
+import re
 
 from rag_graph import GraphRAGSystem
 
@@ -99,7 +100,7 @@ class GraphContextService:
         print(f"  ✓ 총 {loaded_count}개 사료 인덱스 로드 완료")
         print(f"  ✓ 그래프 DB는 기존 ArangoDB 데이터 사용")
 
-    def map_keywords_to_entities(self, keywords: List[str], top_k: int = 5) -> List[Dict[str, Any]]:
+    def map_keywords_to_entities(self, keywords: List[str], top_k: int = 10) -> List[Dict[str, Any]]:
         """키워드를 ArangoDB 그래프에서 실제 관계된 엔티티로 매핑
         
         지식 그래프에서 직접 연결된 엔티티만 가져옴 (FAISS 미사용)
@@ -166,4 +167,156 @@ class GraphContextService:
     def get_documents_for_entity(self, entity_name: str, top_k: int = 3) -> List[Dict[str, Any]]:
         docs = self.system.search_documents(entity_name, k=top_k)
         return docs
+
+    def search_documents_faiss(self, query: str, top_k: int = 5, expand_context: bool = True) -> List[Dict[str, Any]]:
+        """FAISS 벡터 검색으로 관련 문서 조회
+        
+        Args:
+            query: 검색 쿼리
+            top_k: 반환할 문서 수
+            expand_context: True면 앞뒤 청크를 합쳐 완전한 문장으로 만듦
+        """
+        if not self.system.vectorstore:
+            return []
+        
+        try:
+            # 더 많은 청크를 가져와서 문맥 확장에 사용 (5배로 증가)
+            search_k = top_k * 5 if expand_context else top_k
+            docs = self.system.vectorstore.similarity_search(query, k=search_k)
+            
+            if not expand_context:
+                results = []
+                for doc in docs[:top_k]:
+                    results.append({
+                        "content": doc.page_content,
+                        "source": doc.metadata.get("source", ""),
+                        "metadata": doc.metadata
+                    })
+                return results
+            
+            # 문맥 확장: 같은 소스의 청크들을 그룹화하고 합침
+            source_chunks: Dict[str, List[Any]] = {}
+            for doc in docs:
+                source = doc.metadata.get("source", "unknown")
+                if source not in source_chunks:
+                    source_chunks[source] = []
+                source_chunks[source].append(doc)
+            
+            results = []
+            seen_content = set()  # 중복 방지
+            
+            for source, chunks in source_chunks.items():
+                if len(results) >= top_k:
+                    break
+                
+                # 청크들의 내용을 합침
+                combined_content = self._combine_chunks(chunks)
+                
+                # 중복 체크 (첫 100자로)
+                content_key = combined_content[:100] if combined_content else ""
+                if content_key in seen_content:
+                    continue
+                seen_content.add(content_key)
+                
+                if combined_content:
+                    results.append({
+                        "content": combined_content,
+                        "source": source,
+                        "metadata": chunks[0].metadata if chunks else {}
+                    })
+            
+            return results[:top_k]
+            
+        except Exception as e:
+            print(f"[FAISS 검색 오류] {e}")
+            return []
+    
+    def _combine_chunks(self, chunks: List[Any], max_length: int = 1500) -> str:
+        """여러 청크를 하나의 완전한 문장으로 합침 (앞뒤 문맥 포함)"""
+        if not chunks:
+            return ""
+        
+        # 청크 내용 추출
+        contents = [chunk.page_content for chunk in chunks]
+        
+        # 청크들을 순서대로 정렬 (메타데이터에 chunk_id나 순서 정보가 있으면 사용)
+        # 없으면 그냥 순서대로
+        
+        # 중복 제거하면서 합침
+        seen_sentences = set()
+        combined_parts = []
+        
+        for content in contents:
+            # 문장 단위로 분리
+            sentences = self._split_into_sentences(content)
+            
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if not sentence:
+                    continue
+                    
+                # 중복 문장 제거 (앞 30자로 체크)
+                sentence_key = sentence[:30]
+                if sentence_key in seen_sentences:
+                    continue
+                seen_sentences.add(sentence_key)
+                
+                combined_parts.append(sentence)
+        
+        # 합친 내용이 너무 길면 자르기
+        combined = ' '.join(combined_parts)
+        
+        if len(combined) > max_length:
+            # 문장 단위로 자르기
+            truncated = ""
+            for part in combined_parts:
+                if len(truncated) + len(part) + 1 > max_length:
+                    break
+                truncated += part + " "
+            combined = truncated.strip()
+            if combined and not combined.endswith(('.', '다', '요', '음')):
+                combined += "..."
+        
+        return combined
+    
+    def _split_into_sentences(self, text: str) -> List[str]:
+        """텍스트를 문장 단위로 분리"""
+        # 한국어 문장 종결 패턴
+        # 마침표, 물음표, 느낌표 뒤에 공백이나 줄바꿈이 오면 문장 끝
+        sentences = re.split(r'(?<=[.?!다요음])\s+', text)
+        
+        # 빈 문장 제거
+        return [s.strip() for s in sentences if s.strip()]
+
+    def find_entities_in_text(self, text: str, max_count: int = 5) -> List[Dict[str, Any]]:
+        """텍스트에서 GraphDB에 존재하는 엔티티 찾기"""
+        if not self.system.graph_db:
+            return []
+        
+        # 텍스트에서 n-gram 추출 (2~6자)
+        found_entities = []
+        seen_names = set()
+        
+        # 한글 단어 추출 (간단한 방식)
+        import re
+        words = re.findall(r'[가-힣]{2,10}', text)
+        
+        for word in words:
+            if word in seen_names or len(word) < 2:
+                continue
+            
+            # GraphDB에서 엔티티 조회
+            entity = self.system.graph_db.query_entity(word)
+            if entity:
+                seen_names.add(word)
+                found_entities.append({
+                    "name": word,
+                    "category": entity.get("category", ""),
+                    "type": entity.get("type", "")
+                })
+                
+                if len(found_entities) >= max_count:
+                    break
+        
+        return found_entities
 

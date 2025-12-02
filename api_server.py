@@ -100,7 +100,7 @@ def get_services():
                     "embedding_model_name": os.environ.get("EMBED_MODEL", "intfloat/multilingual-e5-large-instruct"),
                     "llm_model_name": os.environ.get("LLM_MODEL", "gemma3:12b"),
                     "arango_host": os.environ.get("ARANGO_HOST", "localhost"),
-                    "arango_port": int(os.environ.get("ARANGO_PORT", "8529")),
+                    "arango_port": int(os.environ.get("ARANGO_PORT", "8530")),
                     "arango_password": os.environ.get("ARANGO_PASSWORD", ""),
                     "arango_db_name": os.environ.get("ARANGO_DB", "knowledge_graph"),
                     "arango_reset": False,
@@ -177,7 +177,7 @@ def create_app() -> FastAPI:
         video_id: str,
         start: Optional[float] = Query(None),
         end: Optional[float] = Query(None),
-        top_k: int = Query(5, ge=1, le=20)
+        top_k: int = Query(10, ge=1, le=20)
     ):
         graph_service, keyword_store, registry = get_services()
         keyword_path = await run_in_thread(registry.resolve, video_id)
@@ -242,7 +242,7 @@ def create_app() -> FastAPI:
     @app.post("/videos/{video_id:path}/preload")
     async def preload_video_keywords(
         video_id: str,
-        top_k: int = Query(5, ge=1, le=20)
+        top_k: int = Query(10, ge=1, le=20)
     ):
         """영상의 모든 키워드 슬라이스를 백그라운드에서 미리 로드"""
         graph_service, keyword_store, registry = get_services()
@@ -313,10 +313,24 @@ def create_app() -> FastAPI:
                 continue
             
             try:
-                keywords = [
-                    {"term": k.get("term") or k.get("keyword"), "score": k.get("score", 1.0)}
-                    for k in sl.keywords if k.get("term") or k.get("keyword")
-                ]
+                # children 포함하여 키워드 저장
+                keywords = []
+                for k in sl.keywords:
+                    term = k.get("term") or k.get("keyword")
+                    if not term:
+                        continue
+                    kw_item = {
+                        "term": term,
+                        "score": k.get("score", 1.0)
+                    }
+                    # children, start, end 포함
+                    if "children" in k:
+                        kw_item["children"] = k["children"]
+                    if "start" in k:
+                        kw_item["start"] = k["start"]
+                    if "end" in k:
+                        kw_item["end"] = k["end"]
+                    keywords.append(kw_item)
                 
                 if keywords:
                     keyword_terms = [k["term"] for k in keywords]
@@ -335,6 +349,11 @@ def create_app() -> FastAPI:
                     "slice_start": sl.start,
                     "slice_end": sl.end
                 }
+                
+                # children 포함 여부 로그
+                for kw in keywords:
+                    if "children" in kw:
+                        print(f"[Preload] '{kw['term']}'의 children: {[c.get('term') for c in kw['children']]}")
                 
                 _preload_status[video_id]["loaded_slices"] = idx + 1
                 print(f"[Preload] 완료: slice {idx+1}/{len(slices)}")
@@ -375,19 +394,67 @@ def create_app() -> FastAPI:
             depth
         )
         
-        if not context["entity"]:
+        entity = context.get("entity")
+        neighbors = context.get("neighbors", {})
+        documents = []
+        faiss_fallback = False
+        
+        # 엔티티가 있고 sources가 있는 경우
+        if entity:
+            sources = entity.get("sources", [])
+            if sources and len(sources) > 0:
+                # GraphDB sources 사용
+                documents = await run_in_thread(
+                    graph_service.get_documents_for_entity, 
+                    entity_name, 
+                    5
+                )
+            else:
+                # sources가 없으면 FAISS 검색
+                print(f"[entity] '{entity_name}' sources 없음 - FAISS 검색")
+                faiss_fallback = True
+        else:
+            # 엔티티가 없으면 FAISS 검색
+            print(f"[entity] '{entity_name}' GraphDB에 없음 - FAISS 검색")
+            faiss_fallback = True
+        
+        # FAISS 폴백 검색
+        if faiss_fallback:
+            try:
+                faiss_results = await run_in_thread(
+                    graph_service.search_documents_faiss,
+                    entity_name,
+                    5
+                )
+                
+                # FAISS 결과를 documents 형식으로 변환
+                for doc in faiss_results:
+                    content = doc.get("content", "")
+                    source = doc.get("source", "")
+                    doc_name = source.split("/")[-1].split("\\")[-1] if source else "알 수 없음"
+                    
+                    documents.append({
+                        "content": content,
+                        "metadata": {
+                            "source": source,
+                            "doc": doc_name,
+                            "from_faiss": True
+                        }
+                    })
+                
+                print(f"[entity] FAISS에서 {len(documents)}개 문서 검색됨")
+            except Exception as e:
+                print(f"[entity] FAISS 검색 오류: {e}")
+        
+        # 엔티티가 없어도 FAISS 결과가 있으면 반환
+        if not entity and not documents:
             raise HTTPException(status_code=404, detail="엔티티를 찾을 수 없습니다.")
         
-        documents = await run_in_thread(
-            graph_service.get_documents_for_entity, 
-            entity_name, 
-            5
-        )
-        
         return {
-            "entity": context["entity"],
-            "neighbors": context["neighbors"],
-            "documents": documents
+            "entity": entity,
+            "neighbors": neighbors,
+            "documents": documents,
+            "faiss_fallback": faiss_fallback
         }
 
     @app.post("/query", response_model=QueryResponse)
@@ -519,6 +586,131 @@ def create_app() -> FastAPI:
             "llm_queue_max_concurrent": 2
         }
 
+    @app.get("/map-keywords")
+    async def get_map_keywords():
+        """지도 타임라인 키워드 조회 (map_keyword.json)"""
+        import json
+        
+        keyword_root = os.environ.get("VIDEO_KEYWORD_DIR", "video_keywords")
+        map_keyword_path = os.path.join(keyword_root, "map_keyword.json")
+        
+        if not os.path.exists(map_keyword_path):
+            return {"timelineData": []}
+        
+        try:
+            with open(map_keyword_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return data
+        except Exception as e:
+            print(f"map_keyword.json 로드 오류: {e}")
+            return {"timelineData": []}
+
+    @app.post("/cache/clear")
+    async def clear_cache():
+        """키워드 캐시 클리어 (JSON 변경 후 호출)"""
+        graph_service, keyword_store, registry = get_services()
+        keyword_store.clear_cache()
+        _preload_cache.clear()
+        _preload_status.clear()
+        return {"message": "캐시 클리어 완료"}
+
+    @app.get("/entity/{entity_name}/info")
+    async def get_entity_info(entity_name: str):
+        """
+        엔티티 정보 조회 - GraphDB에 있으면 엔티티 정보 반환,
+        없으면 FAISS에서 관련 문서/정보 검색하여 반환
+        """
+        graph_service, keyword_store, registry = get_services()
+        
+        # 1. GraphDB에서 엔티티 조회 시도
+        entity_data = await run_in_thread(
+            graph_service.get_entity_context,
+            entity_name,
+            1
+        )
+        
+        if entity_data and entity_data.get("entity"):
+            # GraphDB에 있음 - 엔티티 정보와 sources 반환
+            entity = entity_data["entity"]
+            sources = entity.get("sources", [])
+            
+            return {
+                "found_in": "graphdb",
+                "entity_name": entity_name,
+                "entity": entity,
+                "sources": sources,
+                "neighbors": entity_data.get("neighbors", {})
+            }
+        
+        # 2. GraphDB에 없음 - FAISS에서 검색
+        print(f"[entity_info] '{entity_name}' GraphDB에 없음 - FAISS 검색")
+        
+        try:
+            # FAISS 벡터 검색으로 관련 문서 조회
+            faiss_results = await run_in_thread(
+                graph_service.search_documents_faiss,
+                entity_name,
+                5  # top_k
+            )
+            
+            # FAISS 결과에서 관련 엔티티들의 sources 수집
+            related_sources = []
+            related_entities = []
+            
+            for doc in faiss_results:
+                content = doc.get("content", "")[:500]
+                source = doc.get("source", "")
+                
+                # 문서 정보 추가
+                related_sources.append({
+                    "doc": source.split("/")[-1].split("\\")[-1] if source else "알 수 없음",
+                    "snippet": content,
+                    "type": "faiss_document"
+                })
+                
+                # 문서 내용에서 GraphDB 엔티티 찾기
+                entities_in_doc = await run_in_thread(
+                    graph_service.find_entities_in_text,
+                    content,
+                    3  # 최대 3개
+                )
+                
+                for ent in entities_in_doc:
+                    if ent.get("name") and ent["name"] not in [e.get("name") for e in related_entities]:
+                        # 해당 엔티티의 sources도 가져오기
+                        ent_context = await run_in_thread(
+                            graph_service.get_entity_context,
+                            ent["name"],
+                            0
+                        )
+                        if ent_context and ent_context.get("entity"):
+                            ent_sources = ent_context["entity"].get("sources", [])
+                            related_entities.append({
+                                "name": ent["name"],
+                                "category": ent_context["entity"].get("category", ""),
+                                "type": ent_context["entity"].get("type", ""),
+                                "sources": ent_sources[:3]  # 최대 3개 sources
+                            })
+            
+            return {
+                "found_in": "faiss",
+                "entity_name": entity_name,
+                "entity": None,
+                "sources": related_sources,
+                "related_entities": related_entities,
+                "message": f"'{entity_name}'은(는) GraphDB에 없어 FAISS에서 관련 문서를 검색했습니다."
+            }
+            
+        except Exception as e:
+            print(f"[entity_info] FAISS 검색 오류: {e}")
+            return {
+                "found_in": "none",
+                "entity_name": entity_name,
+                "entity": None,
+                "sources": [],
+                "message": f"'{entity_name}'에 대한 정보를 찾을 수 없습니다."
+            }
+
     return app
 
 
@@ -533,6 +725,11 @@ async def startup_event():
     
     # 비동기로 서비스 초기화
     await run_in_thread(get_services)
+    
+    # 키워드 스토어 캐시 클리어 (JSON 변경 반영)
+    graph_service, keyword_store, registry = get_services()
+    keyword_store.clear_cache()
+    print("   키워드 캐시 클리어 완료")
     
     # LLM 큐 초기화
     get_llm_queue()

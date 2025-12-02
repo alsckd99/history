@@ -12,6 +12,43 @@ import GraphView from "./GraphView";
 import MapView from "./MapView";
 import "./styles.css";
 
+// 마크다운 링크를 HTML로 변환하는 함수
+function renderMarkdownLinks(text: string): JSX.Element[] {
+  // [텍스트](url) 패턴 매칭
+  const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+  const parts: JSX.Element[] = [];
+  let lastIndex = 0;
+  let match;
+  let keyIndex = 0;
+
+  while ((match = linkRegex.exec(text)) !== null) {
+    // 링크 앞의 일반 텍스트
+    if (match.index > lastIndex) {
+      parts.push(<span key={keyIndex++}>{text.slice(lastIndex, match.index)}</span>);
+    }
+    // 링크
+    parts.push(
+      <a 
+        key={keyIndex++} 
+        href={match[2]} 
+        target="_blank" 
+        rel="noopener noreferrer"
+        style={{ color: '#667eea', textDecoration: 'underline' }}
+      >
+        {match[1]}
+      </a>
+    );
+    lastIndex = match.index + match[0].length;
+  }
+
+  // 남은 텍스트
+  if (lastIndex < text.length) {
+    parts.push(<span key={keyIndex++}>{text.slice(lastIndex)}</span>);
+  }
+
+  return parts.length > 0 ? parts : [<span key={0}>{text}</span>];
+}
+
 function App() {
   const [videoUrl, setVideoUrl] = useState("");
   const [currentTime, setCurrentTime] = useState(0);
@@ -121,42 +158,60 @@ function App() {
     };
   }, [isYoutubeVideo, videoUrl]);
 
-  // YouTube 영상일 때 시간 추적 (5초마다 업데이트 - 더 세밀한 노드 생성)
+  // YouTube 영상일 때 실제 시간 추적 (YouTube API 사용)
   useEffect(() => {
-    // 일시정지 상태면 타이머 정리하고 리턴
-    if (isPaused) {
-      if (youtubeTimerRef.current) {
-        clearInterval(youtubeTimerRef.current);
-        youtubeTimerRef.current = null;
-        console.log('[App] 타이머 중지 - isPaused:', isPaused);
+    if (!isYoutubeVideo || !videoId || !youtubeIframeRef.current) return;
+    
+    const iframe = youtubeIframeRef.current;
+    
+    // YouTube에서 현재 시간 요청
+    const requestCurrentTime = () => {
+      iframe.contentWindow?.postMessage(JSON.stringify({
+        event: "command",
+        func: "getCurrentTime",
+        args: []
+      }), "*");
+    };
+    
+    // YouTube에서 시간 응답 수신
+    const handleTimeMessage = (event: MessageEvent) => {
+      if (!event.origin.includes("youtube.com")) return;
+      if (!event.data || typeof event.data !== "string") return;
+      
+      try {
+        const data = JSON.parse(event.data);
+        // getCurrentTime 응답 처리
+        if (data.event === "infoDelivery" && data.info && typeof data.info.currentTime === "number") {
+          const newTime = Math.floor(data.info.currentTime);
+          setCurrentTime(prev => {
+            if (Math.abs(prev - newTime) >= 1) {
+              console.log('[App] YouTube 시간 업데이트:', prev, '->', newTime);
+              return newTime;
+            }
+            return prev;
+          });
+        }
+      } catch {
+        // ignore parsing errors
       }
-      return;
+    };
+    
+    window.addEventListener("message", handleTimeMessage);
+    
+    // 일시정지 상태가 아닐 때만 시간 요청
+    let timer: number | null = null;
+    if (!isPaused) {
+      console.log('[App] YouTube 시간 추적 시작');
+      // 1초마다 현재 시간 요청
+      timer = window.setInterval(requestCurrentTime, 1000);
     }
     
-    // YouTube 영상이고 재생 중일 때만 타이머 시작
-    if (isYoutubeVideo && videoId) {
-      // 기존 타이머 정리
-      if (youtubeTimerRef.current) {
-        clearInterval(youtubeTimerRef.current);
+    return () => {
+      window.removeEventListener("message", handleTimeMessage);
+      if (timer) {
+        clearInterval(timer);
       }
-      
-      console.log('[App] 타이머 시작 - 5초마다 시간 업데이트');
-      
-      // 5초마다 시간 업데이트 (세밀한 슬라이스 변경 감지)
-      youtubeTimerRef.current = window.setInterval(() => {
-        setCurrentTime(prev => {
-          console.log('[App] 시간 업데이트:', prev, '->', prev + 5);
-          return prev + 5;
-        });
-      }, 5000);
-      
-      return () => {
-        if (youtubeTimerRef.current) {
-          clearInterval(youtubeTimerRef.current);
-          youtubeTimerRef.current = null;
-        }
-      };
-    }
+    };
   }, [isYoutubeVideo, videoId, isPaused]);
 
   // YouTube iframe 일시정지/재생 함수
@@ -279,9 +334,24 @@ function App() {
     }
   };
 
-  // 자동 질문 전송 함수
-  const sendAutoQuery = async (entityName: string) => {
-    const autoQuestion = `${entityName}에 대해 알려줘`;
+  // 자동 질문 전송 함수 (타입과 상위 노드 정보 포함)
+  const sendAutoQuery = async (entityName: string, nodeType?: string, rootKeyword?: string) => {
+    // 타입에 따른 프롬프트 생성
+    let typeLabel = '';
+    if (nodeType) {
+      if (nodeType === '인물') typeLabel = ' 인물';
+      else if (nodeType === '사건') typeLabel = ' 사건';
+      else if (nodeType === '지명') typeLabel = ' 지명(장소)';
+      else if (nodeType !== '미분류') typeLabel = ` ${nodeType}`;
+    }
+    
+    // 상위 노드(루트 키워드) 정보 포함
+    let contextPrefix = '';
+    if (rootKeyword && rootKeyword !== entityName) {
+      contextPrefix = `${rootKeyword}에서의 `;
+    }
+    
+    const autoQuestion = `${contextPrefix}${entityName}${typeLabel}에 대해 알려줘`;
     setQueryLoading(true);
     setCurrentQuestion(autoQuestion);
     setShowRagPopup(true); // RAG 팝업 열기
@@ -290,7 +360,7 @@ function App() {
       const payload = {
         query: autoQuestion,
         video_id: queryVideoId || undefined,
-        focus_keywords: [entityName]
+        focus_keywords: rootKeyword ? [entityName, rootKeyword] : [entityName]
       };
       const data = await runQuery(payload);
       setChatHistory(prev => [...prev, { question: autoQuestion, answer: data.answer }]);
@@ -329,8 +399,10 @@ function App() {
       setGraphEntityData(null);
     }
     
-    // 자동 질문 전송
-    sendAutoQuery(entityName);
+    // 자동 질문 전송 (타입과 루트 키워드 정보 포함)
+    const nodeType = entityData?.nodeType;
+    const rootKeyword = entityData?.rootKeyword;
+    sendAutoQuery(entityName, nodeType, rootKeyword);
   };
 
   const extractYoutubeVideoId = (url: string): string | null => {
@@ -625,55 +697,132 @@ function App() {
               </div>
             )}
           </div>
-          
-          {/* 관련 사료 (노드 선택 시) */}
-          {graphEntityName && graphEntityData && (
-            <div className="graph-detail">
-              <h4>{graphEntityName} 관련 사료</h4>
-              <div className="detail-scroll">
-                {graphEntityData.documents.slice(0, 3).map((doc: any, idx: number) => {
-                  let sourceName = doc.metadata?.source || '';
-                  sourceName = sourceName.split('/').pop() || sourceName.split('\\').pop() || sourceName;
-                  sourceName = sourceName.replace(/\.(json|pdf|txt)$/i, '');
-                  if (sourceName.includes('_')) {
-                    sourceName = sourceName.split('_')[0];
-                  }
-                  
-                  return (
-                    <div key={idx} className="doc-snippet">
-                      <p>{doc.content || ''}</p>
-                      <small>{sourceName}</small>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
         </div>
 
-        {/* 지도 섹션 */}
+        {/* 지도 섹션 (관련 사료 + 지도) */}
         <div className="map-section">
           <div className="section-header">
-            <h2>지도</h2>
+            <h2>{graphEntityName ? `${graphEntityName} 관련 사료 & 지도` : '지도'}</h2>
           </div>
-          <div className="map-content">
-            {videoId ? (
-              <MapView 
-                placeNames={mapPlaceNames}
-                currentTime={currentTime}
-              />
-            ) : (
-              <div style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'center', 
-                height: '100%',
-                color: '#6b7280',
-                fontSize: '14px'
-              }}>
-                영상을 업로드하면 지도가 표시됩니다
+          <div className="map-content" style={{ display: 'flex', gap: '8px' }}>
+            {/* 왼쪽: 관련 사료 (노드 선택 시) */}
+            {graphEntityName && graphEntityData && (
+              <div className="map-source-panel">
+                <div className="map-source-scroll">
+                  {(() => {
+                    const entity = graphEntityData.entity as any;
+                    const sources = entity?.sources;
+                    const documents = (graphEntityData as any).documents || [];
+                    const isFaissFallback = (graphEntityData as any).faiss_fallback;
+                    
+                    // 1. GraphDB sources가 있으면 사용
+                    if (sources && Array.isArray(sources) && sources.length > 0) {
+                      return sources.map((source: any, idx: number) => {
+                        let sourceName = source.doc || source.type || '';
+                        sourceName = sourceName.replace(/\.(json|pdf|txt)$/i, '');
+                        if (sourceName.includes('_')) {
+                          sourceName = sourceName.replace(/_/g, ' ');
+                        }
+                        
+                        const sourceUrl = source.url || '';
+                        
+                        return (
+                          <div key={idx} className="map-source-item">
+                            <p>{source.snippet || source.제목 || ''}</p>
+                            <small>
+                              {sourceUrl ? (
+                                <a 
+                                  href={sourceUrl} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  style={{ color: '#667eea', textDecoration: 'underline' }}
+                                >
+                                  {sourceName}
+                                </a>
+                              ) : (
+                                sourceName
+                              )}
+                            </small>
+                          </div>
+                        );
+                      });
+                    }
+                    
+                    // 2. FAISS 폴백: documents 사용
+                    if (documents && documents.length > 0) {
+                      return (
+                        <>
+                          {isFaissFallback && (
+                            <div style={{ 
+                              color: '#94a3b8', 
+                              fontSize: '11px', 
+                              marginBottom: '8px',
+                              padding: '4px 8px',
+                              background: 'rgba(100, 116, 139, 0.2)',
+                              borderRadius: '4px'
+                            }}>
+                              📚 FAISS 검색 결과
+                            </div>
+                          )}
+                          {documents.map((doc: any, idx: number) => {
+                            const content = doc.content || '';
+                            const metadata = doc.metadata || {};
+                            let sourceName = metadata.doc || metadata.source || '알 수 없음';
+                            // 파일 경로에서 파일명만 추출
+                            if (sourceName.includes('/') || sourceName.includes('\\')) {
+                              sourceName = sourceName.split('/').pop()?.split('\\').pop() || sourceName;
+                            }
+                            sourceName = sourceName.replace(/\.(json|pdf|txt)$/i, '');
+                            if (sourceName.includes('_')) {
+                              sourceName = sourceName.replace(/_/g, ' ');
+                            }
+                            
+                            return (
+                              <div key={idx} className="map-source-item">
+                                <p>{content}</p>
+                                <small>{sourceName}</small>
+                              </div>
+                            );
+                          })}
+                        </>
+                      );
+                    }
+                    
+                    // 3. 아무것도 없으면 메시지 표시
+                    return (
+                      <div style={{ color: '#6b7280', fontSize: '12px', textAlign: 'center', padding: '20px' }}>
+                        관련 사료를 찾을 수 없습니다
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
             )}
+            
+            {/* 오른쪽: 지도 */}
+            <div style={{ 
+              flex: graphEntityName && graphEntityData ? 1 : '1 1 100%',
+              height: '100%',
+              minWidth: 0
+            }}>
+              {videoId ? (
+                <MapView 
+                  currentTime={currentTime}
+                  videoId={videoId}
+                />
+              ) : (
+                <div style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'center', 
+                  height: '100%',
+                  color: '#6b7280',
+                  fontSize: '14px'
+                }}>
+                  영상을 업로드하면 지도가 표시됩니다
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -703,7 +852,7 @@ function App() {
                   </div>
                 </div>
                 <div className="answer-box">
-                  <div className="answer-content">{chat.answer}</div>
+                  <div className="answer-content">{renderMarkdownLinks(chat.answer)}</div>
                 </div>
               </div>
             ))}

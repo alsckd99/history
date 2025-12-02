@@ -16,6 +16,32 @@ body {
   color-scheme: dark;
 }
 
+/* ReactFlow 노드 이동 애니메이션 */
+.react-flow__node {
+  transition: transform 0.4s ease-out !important;
+}
+
+/* 새로 생성되는 노드 페이드인 애니메이션 */
+.react-flow__node.animated-enter {
+  animation: nodeEnter 0.3s ease-out forwards;
+}
+
+@keyframes nodeEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ReactFlow 엣지 애니메이션 */
+.react-flow__edge-path {
+  transition: d 0.4s ease-out;
+}
+
 /* 메인 레이아웃: 왼쪽(영상 66%) + 오른쪽(그래프+RAG 34%) */
 .app-layout {
   display: grid;
@@ -312,10 +338,76 @@ body {
   padding: 0;
   border: 1px solid #2d3139;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
   color: #6b7280;
   font-size: 0.9rem;
+}
+
+/* 지도 왼쪽 관련 사료 패널 */
+.map-source-panel {
+  flex: 1;
+  max-width: 50%;
+  display: flex;
+  flex-direction: column;
+  background: #1a1c20;
+  border-right: 1px solid #2d3139;
+  overflow: hidden;
+}
+
+.map-source-panel h4 {
+  padding: 12px 16px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #e8eaed;
+  background: #252830;
+  border-bottom: 1px solid #2d3139;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.map-source-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.map-source-item {
+  background: #252830;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+  border: 1px solid #2d3139;
+}
+
+.map-source-item:last-child {
+  margin-bottom: 0;
+}
+
+.map-source-item p {
+  font-size: 13px;
+  color: #c9cdd4;
+  line-height: 1.5;
+  margin-bottom: 8px;
+  /* 전체 텍스트 표시 (줄 제한 없음) */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.map-source-item small {
+  font-size: 11px;
+  color: #8b8f98;
+}
+
+.map-source-item small a {
+  color: #667eea;
+  text-decoration: none;
+}
+
+.map-source-item small a:hover {
+  text-decoration: underline;
 }
 
 /* 그래프 섹션 */
