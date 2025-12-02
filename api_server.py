@@ -204,6 +204,7 @@ def create_app() -> FastAPI:
                     "keywords": cached["keywords"],
                     "entities": cached.get("entities", []),
                     "mapped_entities": cached["mapped_entities"],
+                    "relations": cached.get("relations", []),  # relations 추가
                     "keyword_path": keyword_path,
                     "slice_count": 1,
                     "from_cache": True
@@ -346,6 +347,7 @@ def create_app() -> FastAPI:
                     "keywords": keywords,
                     "entities": [{"name": e.get("name"), "score": e.get("score", 1.0)} for e in sl.entities] if sl.entities else [],
                     "mapped_entities": mapped_entities,
+                    "relations": sl.relations if sl.relations else [],  # relations 추가
                     "slice_start": sl.start,
                     "slice_end": sl.end
                 }

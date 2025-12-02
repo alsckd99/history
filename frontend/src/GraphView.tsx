@@ -764,10 +764,19 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
 
         console.log(`[GraphView] 새 키워드 추가:`, newKeywords.map((k: any) => k.term));
 
-        // relations 데이터 저장 (API 응답에 있으면)
+        // relations 데이터 저장 (API 응답에 있으면 - 기존에 추가)
         if (data.relations && data.relations.length > 0) {
-          relationsDataRef.current = data.relations;
-          console.log(`[GraphView] relations 저장:`, data.relations.map((r: any) => `${r.from}->${r.to}(${r.start}초)`));
+          // 중복 방지: 이미 있는 relation은 추가하지 않음
+          const existingKeys = new Set(
+            relationsDataRef.current.map((r: any) => `${r.from}->${r.to}`)
+          );
+          const newRelations = data.relations.filter(
+            (r: any) => !existingKeys.has(`${r.from}->${r.to}`)
+          );
+          if (newRelations.length > 0) {
+            relationsDataRef.current = [...relationsDataRef.current, ...newRelations];
+            console.log(`[GraphView] relations 추가:`, newRelations.map((r: any) => `${r.from}->${r.to}(${r.start}초)`));
+          }
         }
 
         const centerX = 400; // 키워드는 화면 중앙에 배치
@@ -1214,7 +1223,13 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       );
       
       if (!fromNode || !toNode) {
-        // 노드가 아직 없으면 대기
+        // 디버그: 어떤 노드가 없는지 확인 (5초마다만 로그)
+        if (Math.floor(currentSec) % 5 === 0) {
+          const nodeTerms = nodes.map(n => n.data.term || n.data.label);
+          console.log(`[GraphView] relation 대기 (${currentSec}초): ${relation.from} -> ${relation.to}`);
+          console.log(`[GraphView] 현재 노드들:`, nodeTerms);
+          console.log(`[GraphView] fromNode(${relation.from}): ${fromNode ? '있음' : '없음'}, toNode(${relation.to}): ${toNode ? '있음' : '없음'}`);
+        }
         return;
       }
       
