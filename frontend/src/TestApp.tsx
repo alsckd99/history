@@ -191,7 +191,6 @@ function TestApp() {
     const autoQuestion = `${contextPrefix}${displayName}${typeLabel}에 대해 알려줘`;
     setQueryLoading(true);
     setCurrentQuestion(autoQuestion);
-    setShowRagPopup(true);
     
     try {
       // focus_keywords에는 searchName(실제 DB 키워드)과 displayName 모두 포함
@@ -241,6 +240,9 @@ function TestApp() {
       setGraphEntityData(null);  // 관련 사료 패널 숨기기
       return;
     }
+    
+    // 노드 클릭 즉시 대화창 열기
+    setShowRagPopup(true);
     
     try {
       // DB 검색은 entityName(실제 키워드)으로
@@ -389,7 +391,7 @@ function TestApp() {
       {showRagPopup && (
         <div className="rag-popup">
           <div className="rag-popup-header">
-            <span>대화</span>
+            <span>대화 (답변에는 약간의 시간이 소요됩니다.)</span>
             <div className="rag-popup-controls">
               <button 
                 className="rag-popup-btn"
