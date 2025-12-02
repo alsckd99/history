@@ -351,12 +351,8 @@ function TestApp() {
                         });
                       }
                       
-                      // sources가 없으면 메시지 표시
-                      return (
-                        // <div style={{ color: '#6b7280', fontSize: '12px', textAlign: 'center', padding: '20px' }}>
-                        //   관련 사료를 찾을 수 없습니다
-                        // </div>
-                      );
+                      // sources가 없으면 아무것도 표시하지 않음
+                      return null;
                     })()}
                   </div>
                 </div>
