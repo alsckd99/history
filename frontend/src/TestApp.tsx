@@ -297,7 +297,7 @@ function TestApp() {
           {/* 그래프 시각화 */}
           <div className="graph-section graph-section-full">
             <div className="section-header">
-              <h2>지식 그래프</h2>
+              <h2>지식 그래프 (궁금한 노드를 클릭하세요)</h2>
             </div>
             <div className="graph-content">
               <GraphView 
