@@ -20,6 +20,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          lfs: true  # Git LFS 파일 가져오기
+
+      - name: Checkout LFS objects
+        run: git lfs checkout
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

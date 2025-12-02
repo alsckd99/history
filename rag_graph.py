@@ -652,8 +652,8 @@ class GraphRAGSystem:
         if skip_vector_index:
             print("\n[1/3] 벡터 인덱스 구축 건너뜀 (구조화된 데이터)")
         else:
-        print("\n[1/3] 벡터 인덱스 구축 중...")
-        self._build_vector_index(documents)
+            print("\n[1/3] 벡터 인덱스 구축 중...")
+            self._build_vector_index(documents)
         
         # 2. 지식 그래프 추출 및 저장
         if extract_graph and self.graph_db.db:
