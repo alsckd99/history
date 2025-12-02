@@ -112,13 +112,27 @@ function TestApp() {
     }
   }, [chatHistory, currentQuestion, queryLoading]);
 
-  // 자동 재생 시작
+  // 자동 재생 시작 + 볼륨 설정
   useEffect(() => {
-    if (TEST_CONFIG.AUTO_PLAY && videoRef.current) {
-      videoRef.current.play().catch(err => {
-        console.log('[TestApp] 자동 재생 실패 (브라우저 정책):', err);
-      });
+    if (videoRef.current) {
+      videoRef.current.volume = 0.5; // 볼륨 50%
+      if (TEST_CONFIG.AUTO_PLAY) {
+        videoRef.current.play().catch(err => {
+          console.log('[TestApp] 자동 재생 실패 (브라우저 정책):', err);
+        });
+      }
     }
+  }, []);
+
+  // 화면 클릭 시 음소거 해제
+  useEffect(() => {
+    const handleClick = () => {
+      if (videoRef.current && videoRef.current.muted) {
+        videoRef.current.muted = false;
+      }
+    };
+    document.addEventListener('click', handleClick, { once: true });
+    return () => document.removeEventListener('click', handleClick);
   }, []);
 
   const pauseVideo = () => {

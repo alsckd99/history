@@ -28,7 +28,7 @@
               "type": "세력",
               "children": [
                 {"term": "고니시 유키나가", "start": 110, "end": 115, "type": "인물"},
-                {"term": "시마즈 요시히로", "start": 194, "end": 200, "type": "인물"}
+                {"term": "시마즈", "start": 194, "end": 200, "type": "인물","DisplayName": "시마즈 요시히로"}
               ]
             },
             {
