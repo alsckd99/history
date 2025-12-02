@@ -213,17 +213,17 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
   useEffect(() => {
     if (!selectedNode) {
       // 선택 해제 시 모든 노드 원래 상태로
-      setNodes((nds) =>
-        nds.map((node) => ({
-          ...node,
-          data: {
-            ...node.data,
+    setNodes((nds) =>
+      nds.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
             isSelected: false,
             isHighlighted: false,
             isFaded: false,
-          },
-        }))
-      );
+        },
+      }))
+    );
       // 엣지도 원래 상태로
       setEdges((eds) =>
         eds.map((edge) => ({
@@ -239,8 +239,10 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       return;
     }
 
-    // 선택된 노드 찾기
-    const selectedNodeObj = nodes.find(n => n.data.label === selectedNode);
+    // 선택된 노드 찾기 (term 또는 label로 비교)
+    const selectedNodeObj = nodes.find(n => 
+      (n.data.term || n.data.label) === selectedNode || n.data.label === selectedNode
+    );
     if (!selectedNodeObj) return;
 
     // 선택된 노드의 부모 ID 찾기 (1깊이 위까지)
@@ -549,9 +551,9 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       
       if (childEntities.length === 0) {
         console.log(`[GraphView] '${entityName}'의 하위 노드 없음`);
-        return;
-      }
-      
+          return;
+        }
+
       const newNodes: Node[] = [];
       const newEdges: Edge[] = [];
       
@@ -662,11 +664,24 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       const nodeSize = isKeyword ? 50 : 30;
       focusOnPosition(node.position.x + nodeSize, node.position.y + nodeSize);
       
-      // 세력, 전투지역 타입은 관련사료/질문 안됨
-      const excludedTypes = ['세력', '전투지역'];
-      if (excludedTypes.includes(nodeType)) {
-        console.log(`[GraphView] '${displayName}'는 '${nodeType}' 타입이므로 관련사료/질문 생략`);
-        // 화면 이동만 하고 onNodeClick은 호출하지 않음
+      // 세력 타입은 선택/하이라이트만 하고 관련사료/RAG 검색은 안됨
+      // (onNodeClick에 skipRag: true 전달)
+      if (nodeType === '세력') {
+        console.log(`[GraphView] '${displayName}'는 '${nodeType}' 타입이므로 관련사료/질문 생략 (선택만 함)`);
+        onNodeClick(searchName, {
+          ...node.data,
+          displayName: displayName,
+          nodeType: nodeType,
+          rootKeyword: rootKeyword,
+          skipRag: true,  // RAG 검색 스킵 플래그
+          skipSources: true,  // 관련 사료 스킵 플래그
+        });
+        return;
+      }
+      
+      // 전투지역 타입은 완전히 무시 (선택도 안됨)
+      if (nodeType === '전투지역') {
+        console.log(`[GraphView] '${displayName}'는 '${nodeType}' 타입이므로 상호작용 없음`);
         return;
       }
       
@@ -1187,7 +1202,7 @@ function GraphViewInner({ videoId, currentTime, onNodeClick, selectedNode, onPla
       const lastNewNode = newNodesList[newNodesList.length - 1];
       // 깊이에 따른 노드 크기
       const nodeSize = getNodeSizeByDepth(lastNewNode.depth);
-      setTimeout(() => {
+          setTimeout(() => {
         console.log(`[GraphView] 화면 이동: ${lastNewNode.label} (${lastNewNode.x + nodeSize/2}, ${lastNewNode.y + nodeSize/2})`);
         focusOnPosition(lastNewNode.x + nodeSize / 2, lastNewNode.y + nodeSize / 2, 0.75);
       }, 200);

@@ -236,6 +236,7 @@ function TestApp() {
             ref={videoRef}
             src={videoUrl}
             controls
+            playsInline
             autoPlay={TEST_CONFIG.AUTO_PLAY}
             muted={TEST_CONFIG.AUTO_PLAY}
             onTimeUpdate={(e) => setCurrentTime((e.target as HTMLVideoElement).currentTime)}

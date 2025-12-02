@@ -228,23 +228,33 @@ function TestApp() {
     
     // entityName: 검색용 이름 (term), displayName: 화면 표시용 이름
     const displayName = entityData?.displayName || entityName;
+    const skipRag = entityData?.skipRag || false;
+    const skipSources = entityData?.skipSources || false;
     
     setGraphEntityName(entityName);
     setGraphDisplayName(displayName);
     
-    try {
-      // DB 검색은 entityName(실제 키워드)으로
-      const docs = await fetchEntity(entityName, 1);
-      setGraphEntityData(docs);
-    } catch (err) {
-      console.error("엔티티 조회 오류:", err);
+    // 관련 사료 스킵이 아닌 경우에만 DB 검색
+    if (!skipSources) {
+      try {
+        // DB 검색은 entityName(실제 키워드)으로
+        const docs = await fetchEntity(entityName, 1);
+        setGraphEntityData(docs);
+      } catch (err) {
+        console.error("엔티티 조회 오류:", err);
+        setGraphEntityData(null);
+      }
+    } else {
+      // 관련 사료 스킵 시 데이터 null로 설정
       setGraphEntityData(null);
     }
     
-    // 자동 질문 전송 (searchName, displayName 모두 전달)
-    const nodeType = entityData?.nodeType;
-    const rootKeyword = entityData?.rootKeyword;
-    sendAutoQuery(entityName, displayName, nodeType, rootKeyword);
+    // RAG 스킵이 아닌 경우에만 자동 질문 전송
+    if (!skipRag) {
+      const nodeType = entityData?.nodeType;
+      const rootKeyword = entityData?.rootKeyword;
+      sendAutoQuery(entityName, displayName, nodeType, rootKeyword);
+    }
   };
 
   return (
@@ -260,6 +270,7 @@ function TestApp() {
             ref={videoRef}
             src={videoUrl}
             controls
+            playsInline
             autoPlay={TEST_CONFIG.AUTO_PLAY}
             onTimeUpdate={(e) => setCurrentTime((e.target as HTMLVideoElement).currentTime)}
             onPause={() => setIsPaused(true)}

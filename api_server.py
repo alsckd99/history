@@ -150,7 +150,7 @@ def create_app() -> FastAPI:
     # ========================================
     # 비동기 엔드포인트들
     # ========================================
-    
+
     @app.get("/videos/registry")
     async def list_registry():
         """Registry에 등록된 모든 영상 목록 조회"""
